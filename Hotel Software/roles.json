@@ -1,0 +1,85 @@
+{
+  "roles": {
+    "admin": {
+      "name": "Administrator",
+      "permissions": ["*"]
+    },
+    "frontdesk": {
+      "name": "Front Desk",
+      "permissions": [
+        "canViewReservations",
+        "canCreateReservations",
+        "canEditReservations",
+        "canCancelReservations",
+        "canAssignRooms",
+        "canCheckIn",
+        "canEditCheckIn",
+        "canCheckOut",
+        "canOverrideRates:direct",
+        "canAddGuestProfile",
+        "canCreateWorkOrders",
+        "canViewGuestProfiles",
+        "canEditGuestProfiles",
+        "canViewLoyalty",
+        "canProcessLoyaltyRedemptions",
+        "canViewFolios",
+        "canPostCharges",
+        "canPostPayments",
+        "canSelectDiscountsFromAdminList",
+        "canViewHousekeepingTasks",
+        "canUpdateRoomStatus",
+        "canViewReports:occupancy",
+        "canViewReports:revenue"
+      ]
+    },
+    "housekeeping": {
+      "name": "Housekeeping",
+      "permissions": [
+        "canViewHousekeepingTasks",
+        "canUpdateRoomStatus",
+        "canCreateWorkOrders"
+      ]
+    },
+    "cafe": {
+      "name": "Café Staff",
+      "permissions": [
+        "canUsePOS",
+        "canPostToRoom",
+        "canProcessTakeaway",
+        "canSelectDiscountsFromAdminList",
+        "canProcessLoyaltyRedemptions"
+      ]
+    },
+    "accounting": {
+      "name": "Accounting",
+      "permissions": [
+        "canViewFolios",
+        "canPostPayments",
+        "canRefundPayments",
+        "canVoidCharges",
+        "canAdjustTaxesFees",
+        "canViewReports:finance",
+        "canExportReports",
+        "canViewAuditLogs"
+      ]
+    },
+    "maintenance": {
+      "name": "Maintenance",
+      "permissions": [
+        "canViewHousekeepingTasks",
+        "canCreateWorkOrders",
+        "canCloseWorkOrders",
+        "canMarkRoomOutOfOrder"
+      ]
+    },
+    "marketing": {
+      "name": "Marketing",
+      "permissions": [
+        "canViewLoyalty",
+        "canProcessLoyaltyRedemptions",
+        "canManageLoyaltyRules",
+        "canViewReports:loyalty"
+      ]
+    }
+  }
+}

@@ -1,0 +1,89 @@
+.reservations-container {
+  font-family: Arial, sans-serif;
+  padding: 20px;
+}
+
+.reservation-form {
+  display: grid;
+  grid-template-columns: 150px 1fr;
+  gap: 10px 20px;
+  max-width: 600px;
+  margin-bottom: 30px;
+  background: #fafafa;
+  padding: 20px;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.reservation-form label {
+  font-weight: bold;
+  align-self: center;
+}
+
+.reservation-form select,
+.reservation-form input {
+  padding: 6px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+
+.form-actions {
+  grid-column: 1 / span 2;
+  text-align: right;
+}
+
+.btn-primary {
+  background: #007bff;
+  color: #fff;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.btn-primary:disabled {
+  background: #ccc;
+  cursor: not-allowed;
+}
+
+.btn-danger {
+  background: #dc3545;
+  color: #fff;
+  padding: 4px 8px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.reservations-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.reservations-table th,
+.reservations-table td {
+  padding: 8px;
+  border: 1px solid #ddd;
+}
+
+.reservations-table thead {
+  background: #f0f0f0;
+}
+
+.row-even {
+  background: #fff;
+}
+
+.row-odd {
+  background: #f9f9f9;
+}
+
+.row-cancelled {
+  background: #ffe5e5;
+}
+
+.error {
+  grid-column: 1 / span 2;
+  color: red;
+}

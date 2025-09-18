@@ -1,0 +1,24 @@
+{
+  "channels": {
+    "direct": {
+      "name": "direct",
+      "weekdayRate": {
+        "Standard Double": 150000,
+        "Deluxe Double": 205000,
+        "Suite Double": 255000,
+        "Suite VIP": 290000
+      },
+      "weekendRate": {
+        "Standard Double": 170000,
+        "Deluxe Double": 225000,
+        "Suite Double": 280000,
+        "Suite VIP": 405000
+      },
+      "rateType": "number"
+    },
+    "ota": {
+      "name": "ota",
+      "rateType": "string"
+    }
+  }
+}

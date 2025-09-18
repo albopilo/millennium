@@ -1,0 +1,38 @@
+{
+  "rooms": {
+    "301": { "roomNumber": "301", "roomType": "Standard Double" },
+    "302": { "roomNumber": "302", "roomType": "Standard Double" },
+    "303": { "roomNumber": "303", "roomType": "Standard Double" },
+    "306": { "roomNumber": "306", "roomType": "Standard Double" },
+    "307": { "roomNumber": "307", "roomType": "Standard Double" },
+    "310": { "roomNumber": "310", "roomType": "Standard Double" },
+    "311": { "roomNumber": "311", "roomType": "Standard Double" },
+    "312": { "roomNumber": "312", "roomType": "Standard Double" },
+    "315": { "roomNumber": "315", "roomType": "Standard Double" },
+    "316": { "roomNumber": "316", "roomType": "Standard Double" },
+    "317": { "roomNumber": "317", "roomType": "Standard Double" },
+    "318": { "roomNumber": "318", "roomType": "Standard Double" },
+
+    "102": { "roomNumber": "102", "roomType": "Deluxe Double" },
+    "103": { "roomNumber": "103", "roomType": "Deluxe Double" },
+    "105": { "roomNumber": "105", "roomType": "Deluxe Double" },
+    "106": { "roomNumber": "106", "roomType": "Deluxe Double" },
+    "107": { "roomNumber": "107", "roomType": "Deluxe Double" },
+
+    "201": { "roomNumber": "201", "roomType": "Suite Double" },
+    "202": { "roomNumber": "202", "roomType": "Suite Double" },
+    "203": { "roomNumber": "203", "roomType": "Suite Double" },
+    "205": { "roomNumber": "205", "roomType": "Suite Double" },
+    "305": { "roomNumber": "305", "roomType": "Suite Double" },
+    "308": { "roomNumber": "308", "roomType": "Suite Double" },
+    "309": { "roomNumber": "309", "roomType": "Suite Double" },
+    "319": { "roomNumber": "319", "roomType": "Suite Double" },
+
+    "101": { "roomNumber": "101", "roomType": "Suite VIP" },
+    "206": { "roomNumber": "206", "roomType": "Suite VIP" },
+    "207": { "roomNumber": "207", "roomType": "Suite VIP" },
+    "208": { "roomNumber": "208", "roomType": "Suite VIP" },
+    "209": { "roomNumber": "209", "roomType": "Suite VIP" },
+    "210": { "roomNumber": "210", "roomType": "Suite VIP" }
+  }
+}

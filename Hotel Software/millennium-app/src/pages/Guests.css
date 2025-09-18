@@ -1,0 +1,85 @@
+.guests-container {
+  font-family: Arial, sans-serif;
+  padding: 20px;
+}
+
+/* Make the form more spacious */
+.guest-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 15px 25px; /* bigger gaps */
+  margin-bottom: 20px;
+  background: #fafafa;
+  padding: 20px; /* more padding */
+  border-radius: 8px;
+}
+
+.guest-form input,
+.guest-form textarea {
+  padding: 8px; /* bigger input box */
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.guest-form textarea {
+  grid-column: 1 / span 2;
+  resize: vertical;
+}
+
+.btn-primary {
+  grid-column: 1 / span 2;
+  background: #007bff;
+  color: #fff;
+  padding: 10px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: bold;
+}
+
+.btn-secondary {
+  background: #ffc107;
+  color: #000;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 4px;
+  margin-right: 6px;
+}
+
+.btn-danger {
+  background: #dc3545;
+  color: #fff;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 4px;
+}
+
+/* Guest list table */
+.guests-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 15px;
+  font-size: 14px;
+}
+
+.guests-table th,
+.guests-table td {
+  border: 1px solid #ddd;
+  padding: 10px 12px; /* more padding for breathing room */
+  text-align: left;
+}
+
+.guests-table thead {
+  background: #f0f0f0;
+}
+
+/* Highlight deleted reservations in guest detail */
+.guest-detail table tr.deleted {
+  background: #ffe6e6; /* light red */
+  color: #b30000;
+}
+
+.guest-detail table tr.deleted td {
+  font-style: italic;
+}

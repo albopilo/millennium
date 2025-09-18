@@ -1,0 +1,199 @@
+:root {
+  --color-primary: #0066cc;
+  --color-secondary: #00aaff;
+  --color-bg: #f9fafb;
+  --color-text: #333333;
+
+  --color-weekday: #e6f4ff;  /* Direct: Weekday */
+  --color-weekend: #fff3e0;  /* Direct: Weekend */
+  --color-ota: #f5f5f5;      /* OTA: Custom */
+
+  --radius: 6px;
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+/* Base */
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  background: var(--color-bg);
+  color: var(--color-text);
+  line-height: 1.45;
+}
+
+/* Layout helpers */
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+/* Cards */
+.card {
+  background: #ffffff;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  margin-bottom: 24px;
+  overflow: hidden;
+}
+
+.card-header {
+  padding: 16px;
+  border-bottom: 1px solid #eeeeee;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.card-header h3 {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+
+.card-body {
+  padding: 16px;
+}
+
+/* Tables */
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table th,
+.table td {
+  padding: 8px;
+  border: 1px solid #dddddd;
+  vertical-align: middle;
+}
+
+.table th {
+  background-color: #f8f8f8;
+  text-align: left;
+  font-weight: 600;
+}
+
+/* Special rate columns */
+.weekday-col { background-color: var(--color-weekday); }
+.weekend-col { background-color: var(--color-weekend); }
+.ota-col     { background-color: var(--color-ota); }
+
+/* Form elements */
+input[type="text"],
+input[type="number"],
+input[type="date"],
+select {
+  height: 32px;
+  padding: 4px 8px;
+  border: 1px solid #cccccc;
+  border-radius: var(--radius);
+  background: #ffffff;
+  color: inherit;
+  outline: none;
+}
+
+input[type="number"] {
+  width: 80px;
+}
+
+input:focus,
+select:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgba(0, 102, 204, 0.15);
+}
+
+/* Buttons */
+button {
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: var(--color-primary);
+  color: #ffffff;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button:hover {
+  filter: brightness(0.95);
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  filter: none;
+}
+
+/* Utilities */
+.mt-0 { margin-top: 0 !important; }
+.mt-1 { margin-top: 8px !important; }
+.mt-2 { margin-top: 16px !important; }
+.mt-3 { margin-top: 24px !important; }
+.mb-1 { margin-bottom: 8px !important; }
+.mb-2 { margin-bottom: 16px !important; }
+.mb-3 { margin-bottom: 24px !important; }
+
+/* === Folio Styles === */
+.reservation-form.folio {
+  display: block;
+  width: 100%;
+  padding: 14px;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.03);
+  font-size: 14px;
+  line-height: 1.5;
+  overflow: hidden;
+}
+
+.folio-header {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1fr;
+  gap: 16px;
+  padding: 8px 8px;
+  font-weight: 700;
+  color: #334155;
+  border-bottom: 1px solid #e6eef6;
+  margin-bottom: 8px;
+}
+
+.folio-line {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1fr;
+  gap: 16px;
+  padding: 10px 8px;
+  align-items: start;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.f-amount {
+  text-align: right;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.f-desc {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.folio-totals {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: 1fr 160px;
+  gap: 6px;
+  align-items: center;
+}
+
+.tot-row.grand .t-value {
+  color: #b91c1c;
+}

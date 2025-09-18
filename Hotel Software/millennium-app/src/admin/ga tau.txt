@@ -1,0 +1,52 @@
+const rateFor = (roomType, channelName, date) => {
+  const channelId = channelName.toLowerCase(); // assuming "direct" / "ota"
+  const rd = rates.find(r => r.roomType === roomType && r.channelId === channelId);
+  if (!rd) return 0;
+
+  if (channelId === "direct") {
+    const day = date.getDay();
+    const isWeekend = day === 0 || day === 6;
+    return isWeekend ? Number(rd.weekendRate || 0) : Number(rd.weekdayRate || 0);
+  } else {
+    // OTA
+    return Number(rd.price || 0);
+  }
+};
+
+let total = 0;
+for (const roomNumber of form.roomNumbers) {
+  const roomDoc = rooms.find(r => r.roomNumber === roomNumber);
+  if (!roomDoc) continue;
+
+  let roomTotal = 0;
+  const current = new Date(form.checkInDate);
+  const end = new Date(form.checkOutDate);
+
+  while (current < end) {
+    const nightly = rateFor(roomDoc.roomType, form.channel, current);
+    roomTotal += nightly;
+    current.setDate(current.getDate() + 1);
+  }
+  total += roomTotal;
+}
+
+total += depositPerRoom * form.roomNumbers.length;
+setForm(prev => ({ ...prev, rate: total }));
+
+
+NavMenu.jsx
+- OK, but you now have AppLayout with navigation. If you keep both, ensure consistent links. Consider using LogoutButton instead of window.reload, and remove duplicate nav to avoid confusion.
+
+
+
+CalendarPage.jsx
+- Issue: Uses r.roomNumber, but reservations store roomNumbers array. Also not routed.
+- Fix mapping if you add the route later:
+wdym add the route?
+
+
+wdym by this:
+// In App.jsx route for "/"
+<AppLayout title="Dashboard">
+  <Dashboard permissions={permissions} />
+</AppLayout>

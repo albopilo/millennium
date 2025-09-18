@@ -1,0 +1,1908 @@
+// src/pages/ReservationDetail.jsx
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useParams, useNavigate } from "react-router-dom";  // 👈 add useNavigate
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  query,
+  where,
+  runTransaction,
+  addDoc,
+  updateDoc,
+  deleteDoc,
+  setDoc   // 👈 add setDoc
+} from "firebase/firestore";
+import { db } from "../firebase";
+import { fmt, ymd } from "../lib/dates";
+
+
+
+export default function ReservationDetail({ permissions = [], currentUser = null, userData = null }) {
+  const navigate = useNavigate();
+
+  // Permissions
+  const can = (p) => permissions.includes(p) || permissions.includes("*");
+  const canUpgrade = can("canUpgradeRoom") || can("canOverrideRoomType");
+  const canOperate = can("canOperateFrontDesk") || can("canEditReservations");
+  const canOverrideBilling = can("canOverrideBilling");
+
+  // Actor and admin
+  const actorName =
+    currentUser?.displayName ||
+    currentUser?.name ||
+    currentUser?.fullName ||
+    currentUser?.email ||
+    "frontdesk";
+
+  const isAdmin = userData?.roleId === "admin";
+
+
+  const { id } = useParams();
+
+  // Data state
+  const [reservation, setReservation] = useState(null);
+  const [rooms, setRooms] = useState([]);
+  const [stays, setStays] = useState([]);
+  const [postings, setPostings] = useState([]);
+  const [payments, setPayments] = useState([]);
+  const [rates, setRates] = useState([]);
+  const [events, setEvents] = useState([]);
+  const [guest, setGuest] = useState(null);
+  const [settings, setSettings] = useState({ currency: "IDR", depositPerRoom: 0 });
+
+  // UI state
+  const [loading, setLoading] = useState(false);
+  const [assignRooms, setAssignRooms] = useState([]);
+
+  // Move / Upgrade
+  const [moveRoomStay, setMoveRoomStay] = useState(null);
+  const [newRoom, setNewRoom] = useState("");
+  const [upgradeStay, setUpgradeStay] = useState(null);
+  const [upgradeRoom, setUpgradeRoom] = useState("");
+  const [upgradeIndex, setUpgradeIndex] = useState(null);
+  const [upgradePreRoom, setUpgradePreRoom] = useState("");
+
+  // Add charge/payment — string buffers (no freeze)
+  const [showAddCharge, setShowAddCharge] = useState(false);
+  const [chargeForm, setChargeForm] = useState({
+    description: "",
+    qtyStr: "1",
+    unitStr: "",
+    accountCode: "MISC"
+  });
+
+  const [showAddPayment, setShowAddPayment] = useState(false);
+  const [paymentForm, setPaymentForm] = useState({
+    amountStr: "",
+    method: "cash",
+    refNo: "",
+    type: "payment"
+  });
+
+  // Delete reservation modal (admin-only)
+  const [deleteReason, setDeleteReason] = useState(""); // ✅ top level
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  // Print
+  const printRef = useRef(null);
+  const [printMode, setPrintMode] = useState(null);
+
+  const currency = settings.currency || "IDR";
+  const fmtMoney = (n) => (isNaN(n) ? "-" : Number(n).toLocaleString("id-ID"));
+
+  // Helpers: free-typing numeric inputs (parse on submit)
+  const onlyDigits = (s) => (s || "").replace(/[^\d]/g, "");
+  const toInt = (s) => {
+    const k = onlyDigits(s);
+    if (!k) return 0;
+    const v = parseInt(k, 10);
+    return isNaN(v) ? 0 : v;
+  };
+
+  // Delete Reservation handler
+// Trigger the modal instead of prompt
+// Delete Reservation handler (mark deleted + cleanup stays)
+const handleDeleteReservation = async () => {
+  if (!isAdmin) return;
+  if (isNightAuditClosed(reservation)) {
+    alert("Cannot delete after night audit. Please use adjustments instead.");
+    return;
+  }
+
+  const reason = prompt("Please enter a reason for deleting this reservation:");
+  if (!reason) return;
+
+  try {
+    const deletedData = {
+      ...reservation,
+      status: "deleted",
+      deletedAt: new Date().toISOString(),
+      deletedBy: actorName,
+      deleteReason: reason,
+    };
+
+    // Save into "deleted_reservations" (archive collection)
+    await setDoc(doc(db, "deleted_reservations", reservation.id), deletedData);
+
+    // Remove from "reservations"
+    await deleteDoc(doc(db, "reservations", reservation.id));
+
+    // 🔹 Also remove all stays linked to this reservation
+    const qStays = query(collection(db, "stays"), where("reservationId", "==", reservation.id));
+    const staySnap = await getDocs(qStays);
+    for (const s of staySnap.docs) {
+      await deleteDoc(doc(db, "stays", s.id));
+    }
+
+    alert("Reservation deleted successfully.");
+    navigate("/calendar");
+  } catch (err) {
+    console.error("Error deleting reservation:", err);
+    alert("Failed to delete reservation. Check console for details.");
+  }
+};
+
+
+
+const confirmDeleteReservation = async () => {
+  if (!deleteReason.trim()) {
+    alert("Please provide a reason for deleting.");
+    return;
+  }
+
+  setDeleting(true);
+  try {
+    const deletedData = {
+      ...reservation,
+      deletedAt: new Date().toISOString(),
+      deletedBy: actorName,
+      deleteReason: deleteReason.trim(),
+    };
+
+    // Save into "deletedReservations"
+    await setDoc(doc(db, "deleted_reservations", reservation.id), deletedData);
+
+    // Remove from "reservations"
+    await deleteDoc(doc(db, "reservations", reservation.id));
+
+    alert("Reservation deleted successfully.");
+    setShowDeleteModal(false);
+    navigate("/reservations"); // redirect back to list
+  } catch (err) {
+    console.error("Error deleting reservation:", err);
+    alert("Failed to delete reservation. Check console for details.");
+  } finally {
+    setDeleting(false);
+  }
+};
+
+function isNightAuditClosed(resObj) {
+  const today = new Date();
+  today.setHours(0,0,0,0);
+  const checkOut = resObj.checkOutDate?.toDate ? resObj.checkOutDate.toDate() : new Date(resObj.checkOutDate);
+  const status = (resObj.status || "").toLowerCase();
+  // Lock if after checkout date OR status is checked-out
+  return today >= checkOut || status === "checked-out";
+}
+
+
+
+
+  // Date/Rate helpers
+  function datesInStay(resObj, checkInOverride, checkOutOverride) {
+    if (!resObj?.checkInDate || !resObj?.checkOutDate) return [];
+    const inD = resObj.checkInDate?.toDate ? resObj.checkInDate.toDate() : new Date(resObj.checkInDate);
+    const outD = resObj.checkOutDate?.toDate ? resObj.checkOutDate.toDate() : new Date(resObj.checkOutDate);
+    const start = checkInOverride || new Date(inD.getFullYear(), inD.getMonth(), inD.getDate(), 0, 0, 0, 0);
+    const end = checkOutOverride || new Date(outD.getFullYear(), outD.getMonth(), outD.getDate(), 0, 0, 0, 0);
+    const list = [];
+    const cur = new Date(start);
+    while (cur < end) {
+      list.push(new Date(cur));
+      cur.setDate(cur.getDate() + 1);
+    }
+    return list;
+  }
+
+  function fmtDMY(d) {
+    const dt = d?.toDate ? d.toDate() : d instanceof Date ? d : (d ? new Date(d) : new Date());
+    const dd = String(dt.getDate()).padStart(2, "0");
+    const mm = String(dt.getMonth() + 1).padStart(2, "0");
+    const yy = dt.getFullYear();
+    return `${dd}/${mm}/${yy}`;
+  }
+
+  function calcNights(resObj) {
+    if (!resObj?.checkInDate || !resObj?.checkOutDate) return 1;
+    const inD = resObj.checkInDate?.toDate ? resObj.checkInDate.toDate() : new Date(resObj.checkInDate);
+    const outD = resObj.checkOutDate?.toDate ? resObj.checkOutDate.toDate() : new Date(resObj.checkOutDate);
+    const ms = Math.max(0, outD.setHours(0, 0, 0, 0) - inD.setHours(0, 0, 0, 0));
+    return Math.max(1, Math.round(ms / (1000 * 60 * 60 * 24)));
+  }
+
+  function adultsChildren(resObj, g) {
+    const a = Number(resObj?.adults ?? g?.adults ?? 1);
+    const c = Number(resObj?.children ?? g?.children ?? 0);
+    const aText = `${a} ${a === 1 ? "Dewasa" : "Dewasa"}`;
+    const cText = `${c} ${c === 1 ? "Anak" : "Anak"}`;
+    return `${aText}, ${cText}`;
+  }
+
+  function fmtCurrency(curr, n) {
+    const v = Number(n || 0);
+    return `${curr || "IDR"} ${isNaN(v) ? "-" : v.toLocaleString("id-ID")}`;
+  }
+
+  const getEventForDate = (date) => {
+    return events.find((ev) => {
+      const start = new Date(ev.startDate);
+      const end = new Date(ev.endDate);
+      return date >= start && date <= end;
+    });
+  };
+
+  const rateFor = (roomType, channelName, date) => {
+    const channelId = (channelName || "").toLowerCase();
+    const rd = rates.find((r) => r.roomType === roomType && r.channelId === channelId);
+    if (!rd) return 0;
+    if (channelId === "direct") {
+      const day = date.getDay();
+      const isWeekend = day === 0 || day === 6;
+      return isWeekend ? Number(rd.weekendRate || 0) : Number(rd.weekdayRate || 0);
+    }
+    return Number(rd.price || 0);
+  };
+
+  function sameMonthDay(d1, d2) {
+    return d1.getMonth() === d2.getMonth() && d1.getDate() === d2.getDate();
+  }
+
+  function tierDiscountPctFor(resObj, g) {
+    if ((resObj?.channel || "").toLowerCase() !== "direct" || !g?.tier) return 0;
+    if (g.tier === "Silver") return 0.05;
+    if (g.tier === "Gold") return 0.10;
+    return 0;
+  }
+
+  function birthdayNightDateFor(resObj, g) {
+    if (!g?.birthdate) return null;
+    const nights = datesInStay(resObj);
+    const b = new Date(g.birthdate);
+    return nights.find((n) => sameMonthDay(n, b)) || null;
+  }
+
+  // Availability guard
+  async function isRoomAvailableForRes(resObj, roomNumber) {
+    if (!resObj?.checkInDate || !resObj?.checkOutDate) return false;
+    const inD = resObj.checkInDate?.toDate ? resObj.checkInDate.toDate() : new Date(resObj.checkInDate);
+    const outD = resObj.checkOutDate?.toDate ? resObj.checkOutDate.toDate() : new Date(resObj.checkOutDate);
+
+    const qRes = query(
+      collection(db, "reservations"),
+      where("roomNumbers", "array-contains", roomNumber),
+      where("status", "in", ["booked", "checked-in"])
+    );
+    const snap = await getDocs(qRes);
+    return snap.docs.every((d) => {
+      const r = d.data();
+      if (d.id === resObj.id) return true;
+      const rIn = r.checkInDate?.toDate ? r.checkInDate.toDate() : new Date(r.checkInDate);
+      const rOut = r.checkOutDate?.toDate ? r.checkOutDate.toDate() : new Date(r.checkOutDate);
+      return outD <= rIn || inD >= rOut;
+    });
+  }
+
+  // Audit log
+  async function logAction(action, payload = {}) {
+    try {
+      await addDoc(collection(db, "reservation_logs"), {
+        reservationId: reservation?.id || id,
+        action,
+        by: actorName,
+        at: new Date(),
+        payload
+      });
+    } catch {
+      // best-effort
+      console.log("logAction: failed to write", action, payload);
+    }
+  }
+
+  // Ensure a single DEPOSIT posting exists (forecast before check-in, posted after)
+  async function ensureDepositPosting(resObj, assignedRooms) {
+    const depositPerRoom = Number(resObj.depositPerRoom || settings.depositPerRoom || 0);
+    const count = Array.isArray(assignedRooms) ? assignedRooms.length : 0;
+    const depositTotal = depositPerRoom * count;
+    if (depositTotal <= 0) return;
+
+    // Find any existing deposit postings for the reservation
+    const pSnap = await getDocs(
+      query(collection(db, "postings"), where("reservationId", "==", resObj.id), where("accountCode", "==", "DEPOSIT"))
+    );
+
+    const existing = pSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+
+    // If we have at least one deposit posting, update the first and void the rest.
+    if (existing.length > 0) {
+      // Update first deposit to correct total & status
+      const primary = existing[0];
+      const desiredStatus = (resObj.status || "").toLowerCase() === "checked-in" ? "posted" : "forecast";
+      try {
+        await updateDoc(doc(db, "postings", primary.id), { amount: depositTotal, status: desiredStatus });
+      } catch (err) {
+        console.log("ensureDepositPosting: failed to update primary deposit", err);
+      }
+
+      // Void any extra duplicates
+      for (let i = 1; i < existing.length; i++) {
+        const dup = existing[i];
+        try {
+          if ((dup.status || "posted") !== "void") {
+            await updateDoc(doc(db, "postings", dup.id), { status: "void" });
+          }
+        } catch (err) {
+          console.log("ensureDepositPosting: failed to void duplicate deposit", dup.id, err);
+        }
+      }
+      return;
+    }
+
+    // No deposit exists — create one
+    try {
+      await addDoc(collection(db, "postings"), {
+        reservationId: resObj.id,
+        stayId: null,
+        roomNumber: null,
+        description: "Security Deposit",
+        amount: depositTotal,
+        tax: 0,
+        service: 0,
+        status: resObj.status === "checked-in" ? "posted" : "forecast",
+        accountCode: "DEPOSIT",
+        createdAt: new Date(),
+        createdBy: actorName
+      });
+    } catch (err) {
+      console.log("ensureDepositPosting: failed to create deposit posting", err);
+    }
+  }
+
+  // Persist assignment and rebuild forecast postings (ROOM + DEPOSIT)
+  async function persistAssignmentAndForecast(nextAssign) {
+    await updateDoc(doc(db, "reservations", reservation.id), { roomNumbers: nextAssign });
+    await logAction("assignment.update", { roomNumbers: nextAssign });
+
+    // Void existing forecast ROOM postings
+    const pSnap = await getDocs(query(collection(db, "postings"), where("reservationId", "==", reservation.id)));
+    const forecasts = pSnap.docs.filter(
+      (d) => (d.data().status || "posted") === "forecast" && d.data().accountCode === "ROOM"
+    );
+    for (const f of forecasts) {
+      try {
+        await updateDoc(doc(db, "postings", f.id), { status: "void" });
+      } catch (err) {
+        console.log("persistAssignmentAndForecast: error voiding forecast", f.id, err);
+      }
+    }
+
+    // Rebuild forecasts and ensure deposit
+    await createForecastRoomPostings({ ...reservation, roomNumbers: nextAssign }, nextAssign, guest, rooms);
+    await ensureDepositPosting({ ...reservation, roomNumbers: nextAssign }, nextAssign);
+    await load();
+  }
+
+  // Load all data
+  const load = async () => {
+    setLoading(true);
+    try {
+      const [resSnap, roomsSnap, settingsSnap, ratesSnap, eventsSnap] = await Promise.all([
+        getDoc(doc(db, "reservations", id)),
+        getDocs(collection(db, "rooms")),
+        getDoc(doc(db, "settings", "general")),
+        getDocs(collection(db, "rates")),
+        getDocs(collection(db, "events"))
+      ]);
+      if (!resSnap.exists()) {
+  setLoading(false);
+  navigate("/calendar"); // redirect if reservation not found
+  return;
+}
+
+const res = { id: resSnap.id, ...resSnap.data() };
+
+// ✅ If reservation is marked deleted, redirect away
+if ((res.status || "").toLowerCase() === "deleted") {
+  setLoading(false);
+  navigate("/calendar");
+  return;
+}
+
+setReservation(res);
+
+
+      const initialAssigned = Array.isArray(res.roomNumbers)
+        ? [...res.roomNumbers]
+        : res.roomNumber
+        ? [res.roomNumber]
+        : [];
+      setAssignRooms(initialAssigned);
+
+      const roomList = roomsSnap.docs.map((d) => d.data());
+      setRooms(roomList);
+      if (settingsSnap.exists()) setSettings(settingsSnap.data());
+      setRates(ratesSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      setEvents(eventsSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
+
+      // Guest
+      let g = null;
+      if (res.guestId) {
+        const gSnap = await getDoc(doc(db, "guests", res.guestId));
+        if (gSnap.exists()) g = { id: gSnap.id, ...gSnap.data() };
+      }
+      if (!g) {
+        const gQ = query(collection(db, "guests"), where("name", "==", res.guestName || ""));
+        const gSnap = await getDocs(gQ);
+        if (!gSnap.empty) g = { id: gSnap.docs[0].id, ...gSnap.docs[0].data() };
+      }
+      setGuest(g);
+
+      // Stays and folio
+      const qStays = query(collection(db, "stays"), where("reservationId", "==", res.id));
+      const sSnap = await getDocs(qStays);
+      setStays(sSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
+
+      const [pSnap, paySnap] = await Promise.all([
+        getDocs(query(collection(db, "postings"), where("reservationId", "==", res.id))),
+        getDocs(query(collection(db, "payments"), where("reservationId", "==", res.id)))
+      ]);
+      const pList = pSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      setPostings(pList);
+      setPayments(paySnap.docs.map((d) => ({ id: d.id, ...d.data() })));
+
+      // Create forecasts if needed (ROOM + DEPOSIT)
+      if ((res.status || "").toLowerCase() === "booked" && initialAssigned.length > 0) {
+        const hasForecastRoom = pList.some((p) => (p.status || "posted") === "forecast" && p.accountCode === "ROOM");
+        if (!hasForecastRoom) {
+          await createForecastRoomPostings(res, initialAssigned, g, roomList);
+          await ensureDepositPosting(res, initialAssigned);
+          const p2 = await getDocs(query(collection(db, "postings"), where("reservationId", "==", res.id)));
+          setPostings(p2.docs.map((d) => ({ id: d.id, ...d.data() })));
+        } else {
+          await ensureDepositPosting(res, initialAssigned);
+          const p2 = await getDocs(query(collection(db, "postings"), where("reservationId", "==", res.id)));
+          setPostings(p2.docs.map((d) => ({ id: d.id, ...d.data() })));
+        }
+      }
+    } catch (err) {
+      console.log("load: error", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (id) load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
+  // Folio (itemized lines before totals)
+  const isBooked = (reservation?.status || "").toLowerCase() === "booked";
+  const visiblePostings = useMemo(() => postings.filter((p) => p.status !== "void"), [postings]);
+  const displayChargeLines = useMemo(() => {
+    const targetStatus = isBooked ? "forecast" : "posted";
+    return visiblePostings
+      .filter((p) => p.status === targetStatus && p.accountCode !== "PAY")
+      .sort((a, b) => {
+        const aAt = a.createdAt?.toDate ? a.createdAt.toDate() : a.createdAt ? new Date(a.createdAt) : null;
+        const bAt = b.createdAt?.toDate ? b.createdAt.toDate() : b.createdAt ? new Date(b.createdAt) : null;
+        if (aAt && bAt) return aAt - bAt;
+        if (aAt && !bAt) return -1;
+        if (!aAt && bAt) return 1;
+        const order = { ROOM: 1, DEPOSIT: 2, ADJ: 3 };
+        const ao = order[a.accountCode] || 99;
+        const bo = order[b.accountCode] || 99;
+        if (ao !== bo) return ao - bo;
+        return (a.description || "").localeCompare(b.description || "");
+      });
+  }, [visiblePostings, isBooked]);
+
+  const displayChargesTotal = useMemo(
+    () =>
+      displayChargeLines.reduce(
+        (sum, p) => sum + Number(p.amount || 0) + Number(p.tax || 0) + Number(p.service || 0),
+        0
+      ),
+    [displayChargeLines]
+  );
+
+  const displayPaymentsTotal = useMemo(
+    () =>
+      payments
+        .filter((p) => p.status !== "void" && p.status !== "refunded")
+        .reduce((sum, p) => sum + Number(p.amount || 0), 0),
+    [payments]
+  );
+
+  const displayBalance = displayChargesTotal - displayPaymentsTotal;
+
+  // Room-type lock helpers
+  function roomTypeAtIndex(idx) {
+    const existing = Array.isArray(reservation?.roomNumbers) ? reservation.roomNumbers[idx] : null;
+    const existingType = existing ? rooms.find((r) => r.roomNumber === existing)?.roomType : null;
+    if (existingType) return existingType;
+    const selected = assignRooms[idx];
+    const selectedType = selected ? rooms.find((r) => r.roomNumber === selected)?.roomType : null;
+    return selectedType || null;
+  }
+
+  const assignmentOptionsForIndex = (idx) => {
+    const lockType = roomTypeAtIndex(idx);
+    return rooms
+      .filter((r) => r.status !== "OOO" && r.status !== "Occupied" && (!lockType || r.roomType === lockType))
+      .map((r) => ({
+        value: r.roomNumber,
+        label: `${r.roomNumber} (${r.roomType}) ${r.status ? `[${r.status}]` : ""}`
+      }));
+  };
+
+  // Same-type change options
+  const currentRoomType = useMemo(() => {
+    if (!moveRoomStay) return null;
+    const current = rooms.find((r) => r.roomNumber === moveRoomStay.roomNumber);
+    return current?.roomType || null;
+  }, [moveRoomStay, rooms]);
+
+  const sameTypeOptions = useMemo(() => {
+    if (!moveRoomStay) return [];
+    return rooms
+      .filter(
+        (r) => r.status !== "OOO" && r.status !== "Occupied" && (r.roomType || "") === (currentRoomType || "")
+      )
+      .map((r) => ({ value: r.roomNumber, label: `${r.roomNumber} (${r.roomType})` }));
+  }, [rooms, moveRoomStay, currentRoomType]);
+
+  // Forecast ROOM postings (+tier +birthday)
+  const createForecastRoomPostings = async (resObj, assigned, g, allRooms) => {
+    if (!resObj) return;
+    const nights = datesInStay(resObj);
+    const pct = tierDiscountPctFor(resObj, g);
+    const bday = birthdayNightDateFor(resObj, g);
+
+    // load existing postings once so we can avoid duplicates
+    const pSnapAll = await getDocs(query(collection(db, "postings"), where("reservationId", "==", resObj.id)));
+    const existingPostings = pSnapAll.docs.map((d) => ({ id: d.id, ...d.data() }));
+
+    const deluxeLower = "deluxe";
+    const assignedDocs = (assigned || []).map((n) => allRooms.find((r) => r.roomNumber === n)).filter(Boolean);
+    const firstDeluxeAssigned = assignedDocs.find((r) => (r.roomType || "").toLowerCase() === deluxeLower);
+
+    const year = new Date().getFullYear();
+    const alreadyClaimed = Number(g?.lastBirthdayClaimYear || 0) === year;
+    const applyBirthday = (resObj.channel || "").toLowerCase() === "direct" && bday && !alreadyClaimed;
+
+    for (let idx = 0; idx < (assigned || []).length; idx++) {
+      const roomNumber = assigned[idx];
+      const roomDoc = allRooms.find((r) => r.roomNumber === roomNumber);
+      if (!roomDoc) continue;
+
+      for (const d of nights) {
+        const ev = getEventForDate(d);
+
+        // compute base rate with event override or normal rateFor
+        let base;
+        if (ev && ev.rateType === "custom" && ev.customRates) {
+          const maybe = ev.customRates[roomDoc.roomType];
+          base = maybe != null ? Number(maybe) : rateFor(roomDoc.roomType, resObj.channel, d);
+        } else {
+          base = rateFor(roomDoc.roomType, resObj.channel, d);
+        }
+
+        // fallback to roomDoc.defaultRate if zero or missing
+        if (!base || base <= 0) {
+          base = Number(roomDoc.defaultRate || roomDoc.rate || 0);
+        }
+
+        // If still zero, skip creating a forecast (prevents zero-room-rate postings)
+        if (!base || base <= 0) {
+          console.log(
+            `createForecastRoomPostings: skipping zero base rate for room ${roomNumber} on ${d.toISOString()}`,
+            { roomDoc, ev, base }
+          );
+          continue;
+        }
+
+        let net = Number(base || 0) * (1 - pct);
+
+        // birthday discount logic
+        if (applyBirthday && bday && sameMonthDay(d, bday)) {
+          if (g?.tier === "Silver") {
+            if (idx === 0) net -= Number(base || 0) * 0.5;
+          } else if (g?.tier === "Gold") {
+            if (
+              (roomDoc.roomType || "").toLowerCase() === "deluxe" &&
+              (!firstDeluxeAssigned || firstDeluxeAssigned.roomNumber === roomDoc.roomNumber)
+            ) {
+              net -= Number(base || 0);
+            }
+          }
+          if (net < 0) net = 0;
+        }
+
+        const description = `Room charge ${roomDoc.roomType} ${ymd(d)}`;
+
+        // skip creating duplicate forecast posting for same reservation/room/description/status
+        const alreadyExists = existingPostings.some(
+          (ep) =>
+            ep.accountCode === "ROOM" &&
+            ep.roomNumber === roomNumber &&
+            ep.description === description &&
+            (ep.status === "forecast" || ep.status === "posted")
+        );
+        if (alreadyExists) {
+          // already exists, skip
+          continue;
+        }
+
+        try {
+          const posted = await addDoc(collection(db, "postings"), {
+            reservationId: resObj.id,
+            stayId: null,
+            roomNumber,
+            description,
+            amount: Math.round(net),
+            tax: 0,
+            service: 0,
+            status: "forecast",
+            accountCode: "ROOM",
+            createdAt: new Date(),
+            createdBy: actorName
+          });
+
+          // ensure this new posting is known to the in-memory list to prevent duplicates in this run
+          existingPostings.push({
+            id: posted.id,
+            reservationId: resObj.id,
+            roomNumber,
+            description,
+            accountCode: "ROOM",
+            status: "forecast",
+            amount: Math.round(net)
+          });
+        } catch (err) {
+          console.log("createForecastRoomPostings: failed to add posting", err);
+        }
+      }
+    }
+  };
+
+  // Convert ROOM + DEPOSIT forecasts to posted; attach stayId for ROOM
+  const convertForecastsToPosted = async (stayMapByRoom) => {
+    const pSnap = await getDocs(query(collection(db, "postings"), where("reservationId", "==", reservation.id)));
+    const forecasts = pSnap.docs.filter((d) => {
+      const p = d.data();
+      return p.status === "forecast" && (p.accountCode === "ROOM" || p.accountCode === "DEPOSIT");
+    });
+
+    for (const f of forecasts) {
+      const data = f.data();
+      const stayId = data.accountCode === "ROOM" ? stayMapByRoom[data.roomNumber] || null : null;
+      try {
+        await updateDoc(doc(db, "postings", f.id), { status: "posted", stayId });
+      } catch (err) {
+        console.log("convertForecastsToPosted: failed to update posting", f.id, err);
+      }
+    }
+  };
+
+  // Admin-only cancellation
+  async function cancelReservation() {
+    if (!isAdmin) return;
+    if (isNightAuditClosed(reservation)) {
+      alert("Cannot cancel after night audit. Please use adjustments instead.");
+      return;
+    }
+    if (!window.confirm("Cancel this reservation?")) return;
+    await updateDoc(doc(db, "reservations", reservation.id), {
+      status: "cancelled",
+      cancelledAt: new Date(),
+      cancelledBy: actorName
+    });
+    await logAction("reservation.cancel", {});
+    await load();
+  }
+
+  // NEW: Admin-only delete reservation (move to deleted_reservations)
+  const openDeleteModal = () => {
+    if (!isAdmin) return;
+    setDeleteReason("");
+    setShowDeleteModal(true);
+  };
+
+  const closeDeleteModal = () => {
+    setDeleteReason("");
+    setShowDeleteModal(false);
+  };
+
+  const deleteReservation = async () => {
+    if (!isAdmin || !reservation) return;
+    if (!deleteReason || deleteReason.trim().length < 3) {
+      window.alert("Please provide a reason (at least 3 characters).");
+      return;
+    }
+    const reason = deleteReason.trim();
+    setDeleting(true);
+    try {
+      // Fetch latest reservation doc to include current fields
+      const resRef = doc(db, "reservations", reservation.id);
+      const resSnap = await getDoc(resRef);
+      if (!resSnap.exists()) {
+        window.alert("Reservation not found (already removed).");
+        setDeleting(false);
+        closeDeleteModal();
+        await load();
+        return;
+      }
+      const resData = { id: resSnap.id, ...resSnap.data() };
+
+      // Prepare deleted record
+      const deletedRecord = {
+        ...resData,
+        deletedBy: actorName,
+        deletedAt: new Date(),
+        deletedReason: reason
+      };
+
+      // Write deleted_reservations then delete original inside a transaction to minimize race
+      await runTransaction(db, async (tx) => {
+        // Re-check inside transaction
+        const snap = await tx.get(resRef);
+        if (!snap.exists()) throw new Error("Reservation not found in transaction.");
+
+        // Write to deleted_reservations
+        const delRef = collection(db, "deleted_reservations");
+        // tx.set cannot be used directly to auto-generate id via collection(); we use addDoc outside tx in that case.
+        // But to keep things safe with runTransaction, write to a deterministic doc id (e.g., original id) inside deleted_reservations
+        const delDocRef = doc(db, "deleted_reservations", resRef.id);
+        tx.set(delDocRef, deletedRecord);
+
+        // remove original reservation
+        tx.delete(resRef);
+      });
+
+      await logAction("reservation.delete", { reason });
+      window.alert("Reservation moved to archive (deleted).");
+      closeDeleteModal();
+      await load();
+    } catch (err) {
+      console.error("deleteReservation error:", err);
+      window.alert("Failed to delete reservation: " + (err.message || String(err)));
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  // Actions: Change Room (same type)
+  const doChangeRoom = async () => {
+    if (!canOperate || !moveRoomStay || !newRoom) return;
+
+    const available = await isRoomAvailableForRes(reservation, newRoom);
+    if (!available) {
+      window.alert(`Room ${newRoom} has an overlapping reservation for this date range.`);
+      return;
+    }
+    const target = rooms.find((r) => r.roomNumber === newRoom);
+    const current = rooms.find((r) => r.roomNumber === moveRoomStay.roomNumber);
+    if (!target || !current) {
+      window.alert("Room not found.");
+      return;
+    }
+    if ((target.roomType || "") !== (current.roomType || "")) {
+      window.alert("Room type must match. Use Upgrade Room for different type.");
+      return;
+    }
+    if (target.status === "OOO" || target.status === "Occupied") {
+      window.alert("Target room is not available.");
+      return;
+    }
+
+    try {
+      await runTransaction(db, async (tx) => {
+        const stayRef = doc(db, "stays", moveRoomStay.id);
+        const oldRoomRef = doc(db, "rooms", moveRoomStay.roomNumber);
+        const newRoomRef = doc(db, "rooms", newRoom);
+
+        const [staySnap, newRoomSnap] = await Promise.all([tx.get(stayRef), tx.get(newRoomRef)]);
+        if (!staySnap.exists()) throw new Error("Stay not found.");
+        const s = staySnap.data();
+        if (s.status !== "open") throw new Error("Stay not open.");
+        if (!newRoomSnap.exists()) throw new Error("New room not found.");
+        const nr = newRoomSnap.data();
+        if (nr.status === "OOO" || nr.status === "Occupied") throw new Error("Target room unavailable.");
+
+        tx.update(stayRef, { roomNumber: newRoom, movedAt: new Date(), movedBy: actorName });
+        tx.update(oldRoomRef, { status: "Vacant Dirty" });
+        tx.update(newRoomRef, { status: "Occupied" });
+      });
+
+      await logAction("room.move", { from: moveRoomStay.roomNumber, to: newRoom, stayId: moveRoomStay.id });
+      window.alert(`Moved to room ${newRoom}.`);
+      setMoveRoomStay(null);
+      setNewRoom("");
+      await load();
+    } catch (err) {
+      window.alert(err.message || String(err));
+    }
+  };
+
+  // Upgrade delta
+  async function computeUpgradeDelta(resObj, g, oldRoomType, newRoomType, remainingOnly = true) {
+    const now = new Date(); now.setHours(0, 0, 0, 0);
+    const allNights = datesInStay(resObj);
+    const nights = remainingOnly ? allNights.filter((d) => d >= now) : allNights;
+    const pct = tierDiscountPctFor(resObj, g);
+
+    let oldSum = 0;
+    let newSum = 0;
+    for (const d of nights) {
+      const ev = getEventForDate(d);
+      const oldRate =
+        ev && ev.rateType === "custom" && ev.customRates && ev.customRates[oldRoomType] != null
+          ? Number(ev.customRates[oldRoomType])
+          : rateFor(oldRoomType, resObj.channel, d);
+      const newRate =
+        ev && ev.rateType === "custom" && ev.customRates && ev.customRates[newRoomType] != null
+          ? Number(ev.customRates[newRoomType])
+          : rateFor(newRoomType, resObj.channel, d);
+      oldSum += Number(oldRate || 0) * (1 - pct);
+      newSum += Number(newRate || 0) * (1 - pct);
+    }
+    return Math.round(newSum - oldSum);
+  }
+
+  // Upgrade after check-in
+  const upgradeOptions = useMemo(() => {
+    if (!upgradeStay) return [];
+    const cur = rooms.find((r) => r.roomNumber === upgradeStay.roomNumber);
+    const curType = cur?.roomType || null;
+    return rooms
+      .filter((r) => r.status !== "OOO" && r.status !== "Occupied" && r.roomType !== curType)
+      .map((r) => ({ value: r.roomNumber, label: `${r.roomNumber} (${r.roomType})` }));
+  }, [rooms, upgradeStay]);
+
+  const doUpgradeRoom = async () => {
+    if(isNightAuditClosed(reservation)) {
+      alert("Cannot upgrade room after night audit. Please use adjustments instead.");
+      return;
+    }
+    if (!canUpgrade || !upgradeStay || !upgradeRoom) return;
+
+    const available = await isRoomAvailableForRes(reservation, upgradeRoom);
+    if (!available) {
+      window.alert(`Room ${upgradeRoom} has an overlapping reservation for this date range.`);
+      return;
+    }
+
+    const target = rooms.find((r) => r.roomNumber === upgradeRoom);
+    const current = rooms.find((r) => r.roomNumber === upgradeStay.roomNumber);
+    if (!target || !current) {
+      window.alert("Room not found.");
+      return;
+    }
+    if (target.status === "OOO" || target.status === "Occupied") {
+      window.alert("Target room is not available.");
+      return;
+    }
+
+    const delta = await computeUpgradeDelta(reservation, guest, current.roomType, target.roomType, true);
+    const ok = window.confirm(
+      `Upgrade ${current.roomNumber} (${current.roomType}) ➜ ${target.roomNumber} (${target.roomType})
+Adjustment for remaining nights: ${currency} ${fmtMoney(delta)}.
+Proceed?`
+    );
+    if (!ok) return;
+
+    try {
+      await runTransaction(db, async (tx) => {
+        const stayRef = doc(db, "stays", upgradeStay.id);
+        const oldRoomRef = doc(db, "rooms", upgradeStay.roomNumber);
+        const newRoomRef = doc(db, "rooms", upgradeRoom);
+
+        const [staySnap, newRoomSnap] = await Promise.all([tx.get(stayRef), tx.get(newRoomRef)]);
+        if (!staySnap.exists()) throw new Error("Stay not found.");
+        const s = staySnap.data();
+        if (s.status !== "open") throw new Error("Stay not open.");
+        if (!newRoomSnap.exists()) throw new Error("New room not found.");
+        const nr = newRoomSnap.data();
+        if (nr.status === "OOO" || nr.status === "Occupied") throw new Error("Target room unavailable.");
+
+        tx.update(stayRef, { roomNumber: upgradeRoom, movedAt: new Date(), movedBy: actorName });
+        tx.update(oldRoomRef, { status: "Vacant Dirty" });
+        tx.update(newRoomRef, { status: "Occupied" });
+
+        const adjRef = doc(collection(db, "postings"));
+        tx.set(adjRef, {
+          reservationId: reservation.id,
+          stayId: upgradeStay.id,
+          roomNumber: upgradeRoom,
+          description: "Room upgrade adjustment (remaining nights)",
+          amount: delta,
+          tax: 0,
+          service: 0,
+          status: "posted",
+          accountCode: "ADJ",
+          createdAt: new Date(),
+          createdBy: actorName
+        });
+      });
+
+      await logAction("room.upgrade.afterCheckIn", { from: current.roomNumber, to: upgradeRoom, delta });
+      window.alert("Upgrade done and adjustment posted.");
+      setUpgradeStay(null);
+      setUpgradeRoom("");
+      await load();
+    } catch (err) {
+      window.alert(err.message || String(err));
+    }
+  };
+
+  // Upgrade before check-in
+  const preUpgradeOptions = useMemo(() => {
+    if (upgradeIndex == null) return [];
+    const currentRM = assignRooms[upgradeIndex];
+    const curType = currentRM ? rooms.find((r) => r.roomNumber === currentRM)?.roomType : null;
+    return rooms
+      .filter((r) => r.status !== "OOO" && r.status !== "Occupied" && (!curType || r.roomType !== curType))
+      .map((r) => ({ value: r.roomNumber, label: `${r.roomNumber} (${r.roomType})` }));
+  }, [rooms, assignRooms, upgradeIndex]);
+
+  const doUpgradePreCheckIn = async () => {
+    if (!canUpgrade || upgradeIndex == null || !upgradePreRoom) return;
+
+    const available = await isRoomAvailableForRes(reservation, upgradePreRoom);
+    if (!available) {
+      window.alert(`Room ${upgradePreRoom} has an overlapping reservation for this date range.`);
+      return;
+    }
+
+    const target = rooms.find((r) => r.roomNumber === upgradePreRoom);
+    const currentRM = assignRooms[upgradeIndex];
+    const current = currentRM ? rooms.find((r) => r.roomNumber === currentRM) : null;
+    if (!target) { window.alert("Target room not found."); return; }
+    if (target.status === "OOO" || target.status === "Occupied") {
+      window.alert("Target room not available.");
+      return;
+    }
+
+    const oldType = current?.roomType || rooms.find((r) => r.roomNumber === currentRM)?.roomType;
+    const newType = target.roomType;
+    const delta = await computeUpgradeDelta(reservation, guest, oldType, newType, false);
+
+    const ok = window.confirm(
+      `Upgrade before check-in:\n${current?.roomNumber || currentRM} (${oldType}) ➜ ${target.roomNumber} (${newType})\n` +
+      `Adjustment for entire stay: ${currency} ${fmtMoney(delta)}.\nProceed?`
+    );
+    if (!ok) return;
+
+    try {
+      const next = [...assignRooms];
+      next[upgradeIndex] = target.roomNumber;
+      setAssignRooms(next);
+      await persistAssignmentAndForecast(next);
+
+      if (delta !== 0) {
+        try {
+          await addDoc(collection(db, "postings"), {
+            reservationId: reservation.id,
+            stayId: null,
+            roomNumber: target.roomNumber,
+            description: "Room upgrade adjustment (pre check-in)",
+            amount: delta,
+            tax: 0,
+            service: 0,
+            status: "forecast",
+            accountCode: "ADJ",
+            createdAt: new Date(),
+            createdBy: actorName
+          });
+        } catch (err) {
+          console.log("doUpgradePreCheckIn: failed to create ADJ posting", err);
+        }
+      }
+
+      await logAction("room.upgrade.beforeCheckIn", {
+        index: upgradeIndex,
+        to: target.roomNumber,
+        delta
+      });
+
+      window.alert("Pre check-in upgrade applied. Forecast updated.");
+      setUpgradeIndex(null);
+      setUpgradePreRoom("");
+      await load();
+    } catch (err) {
+      window.alert(err.message || String(err));
+    }
+  };
+
+  // MISSING HANDLERS (added)
+  const submitCharge = async () => {
+    const qty = Math.max(1, toInt(chargeForm.qtyStr));
+    const unit = Math.max(0, toInt(chargeForm.unitStr));
+    const total = qty * unit;
+    if (!chargeForm.description.trim()) { window.alert("Description is required."); return; }
+    if (total <= 0) { window.alert("Unit amount and quantity must produce a total > 0."); return; }
+    const status = (reservation?.status || "").toLowerCase() === "checked-in" ? "posted" : "forecast";
+    try {
+      await addDoc(collection(db, "postings"), {
+        reservationId: reservation.id,
+        stayId: null,
+        roomNumber: null,
+        description: chargeForm.description.trim(),
+        amount: total,
+        tax: 0,
+        service: 0,
+        status,
+        accountCode: (chargeForm.accountCode || "MISC").toUpperCase(),
+        quantity: qty,
+        unitAmount: unit,
+        createdAt: new Date(),
+        createdBy: actorName
+      });
+      await logAction("posting.add", { description: chargeForm.description.trim(), amount: total });
+      setShowAddCharge(false);
+      setChargeForm({ description: "", qtyStr: "1", unitStr: "", accountCode: "MISC" });
+      await load();
+    } catch (err) {
+      console.log("submitCharge: error", err);
+      window.alert("Failed to add charge.");
+    }
+  };
+
+  const submitPayment = async () => {
+    const amt = Math.max(0, toInt(paymentForm.amountStr));
+    if (amt <= 0) { window.alert("Payment amount must be greater than 0."); return; }
+    try {
+      await addDoc(collection(db, "payments"), {
+        reservationId: reservation.id,
+        stayId: null,
+        method: paymentForm.method || "cash",
+        amount: amt,
+        refNo: paymentForm.refNo || "",
+        capturedAt: new Date(),
+        capturedBy: actorName,
+        type: paymentForm.type || "payment"
+      });
+      await logAction("payment.add", {
+        amount: amt,
+        method: paymentForm.method || "cash",
+        refNo: paymentForm.refNo || ""
+      });
+      setShowAddPayment(false);
+      setPaymentForm({ amountStr: "", method: "cash", refNo: "", type: "payment" });
+      await load();
+    } catch (err) {
+      console.log("submitPayment: error", err);
+      window.alert("Failed to add payment.");
+    }
+  };
+
+  const doCheckIn = async () => {
+    if (isNightAuditClosed(reservation)) { window.alert("Cannot check in after night audit. Please contact admin."); return; }
+    if (!reservation || (reservation.status || "").toLowerCase() !== "booked") {
+      window.alert("Reservation is not in 'booked' status."); return;
+    }
+    if (!assignRooms.length) { window.alert("No rooms selected."); return; }
+    for (let idx = 0; idx < assignRooms.length; idx++) {
+      const roomNumber = assignRooms[idx];
+      const r = rooms.find(x => x.roomNumber === roomNumber);
+      if (!r) { window.alert(`Room ${roomNumber} not found.`); return; }
+      if (r.status === "OOO" || r.status === "Occupied") { window.alert(`Room ${roomNumber} is not available.`); return; }
+      const lockType = roomTypeAtIndex(idx);
+      if (lockType && r.roomType !== lockType) {
+        window.alert(`Room ${roomNumber} type mismatch (${r.roomType} vs ${lockType}). Use Upgrade Room.`);
+        return;
+      }
+      if (!await isRoomAvailableForRes(reservation, roomNumber)) {
+        window.alert(`Room ${roomNumber} has an overlapping reservation for this date range.`); return;
+      }
+    }
+    try {
+      const stayMap = {};
+      await runTransaction(db, async (tx) => {
+        const resRef = doc(db, "reservations", reservation.id);
+        const resSnap = await tx.get(resRef);
+        if (!resSnap.exists()) throw new Error("Reservation not found.");
+        const res = resSnap.data();
+        if ((res.status || "").toLowerCase() !== "booked") throw new Error(`Cannot check-in reservation with status ${res.status}.`);
+
+        for (const roomNumber of assignRooms) {
+          const stayRef = doc(collection(db, "stays"));
+          tx.set(stayRef, {
+            reservationId: reservation.id,
+            guestId: guest?.id || null,
+            guestName: reservation.guestName || "",
+            roomNumber,
+            checkInDate: reservation.checkInDate,
+            checkOutDate: reservation.checkOutDate,
+            openedAt: new Date(),
+            closedAt: null,
+            status: "open",
+            balance: 0,
+            currency,
+            createdBy: actorName
+          });
+          stayMap[roomNumber] = stayRef.id;
+          tx.update(doc(db, "rooms", roomNumber), { status: "Occupied" });
+        }
+        tx.update(resRef, { status: "checked-in", checkedInAt: new Date(), roomNumbers: assignRooms });
+      });
+
+      await convertForecastsToPosted(stayMap);
+      await logAction("checkin", { rooms: assignRooms });
+      window.alert("Check-in complete. Room charges posted.");
+      await load();
+    } catch (err) {
+      console.log("doCheckIn: error", err);
+      window.alert(err.message || String(err));
+    }
+  };
+
+  const doCheckOut = async () => {
+    if (isNightAuditClosed(reservation)) { window.alert("Cannot check out after night audit. Please contact admin."); return; }
+    if (displayBalance > 0.01 && !canOverrideBilling) {
+      window.alert(`Cannot check out. Outstanding balance: ${currency} ${fmtMoney(displayBalance)}.`);
+      return;
+    }
+    try {
+      await runTransaction(db, async (tx) => {
+        for (const s of stays.filter(x => x.status === "open")) {
+          tx.update(doc(db, "stays", s.id), { status: "closed", closedAt: new Date() });
+          tx.update(doc(db, "rooms", s.roomNumber), { status: "Vacant Dirty" });
+          const taskRef = doc(collection(db, "hk_tasks"));
+          tx.set(taskRef, {
+            roomNumber: s.roomNumber,
+            date: ymd(new Date()),
+            type: "clean",
+            status: "pending",
+            createdAt: new Date(),
+            createdBy: actorName,
+            reservationId: reservation.id
+          });
+        }
+      });
+
+      const qOpen = query(
+        collection(db, "stays"),
+        where("reservationId", "==", reservation.id),
+        where("status", "==", "open")
+      );
+      if ((await getDocs(qOpen)).empty) {
+        await updateDoc(doc(db, "reservations", reservation.id), { status: "checked-out", checkedOutAt: new Date() });
+      }
+      await logAction("checkout", {});
+      window.alert("Checked out.");
+      await load();
+    } catch (err) {
+      console.log("doCheckOut: error", err);
+      window.alert(err.message || String(err));
+    }
+  };
+
+  const printCheckInForm = () => {
+    setPrintMode("checkin");
+    setTimeout(() => {
+      window.print();
+      setPrintMode(null);
+    }, 50);
+  };
+
+  const printCheckOutBill = () => {
+    setPrintMode("checkout");
+    setTimeout(() => {
+      window.print();
+      setPrintMode(null);
+    }, 50);
+  };
+
+  // Render helpers
+  const renderAssignmentRow = (idx) => {
+    const val = assignRooms[idx] || "";
+    const options = assignmentOptionsForIndex(idx);
+    return (
+      <div key={idx} style={{ marginBottom: 6 }}>
+        <select
+          value={val}
+          onChange={async (e) => {
+            const nextVal = e.target.value;
+            const lockType = roomTypeAtIndex(idx);
+            const selectedRoom = rooms.find((r) => r.roomNumber === nextVal);
+            const selectedType = selectedRoom?.roomType;
+
+            if (lockType && selectedType && lockType !== selectedType) {
+              window.alert(`Room type must remain ${lockType}. Use Upgrade Room for different type.`);
+              return;
+            }
+            if (!selectedRoom) { window.alert("Room not found."); return; }
+            if (selectedRoom.status === "OOO" || selectedRoom.status === "Occupied") {
+              window.alert("Selected room is not available.");
+              return;
+            }
+            const available = await isRoomAvailableForRes(reservation, nextVal);
+            if (!available) {
+              window.alert(`Room ${nextVal} has an overlapping reservation in this date range.`);
+              return;
+            }
+
+            const nextAssign = [...assignRooms];
+            nextAssign[idx] = nextVal;
+            setAssignRooms(nextAssign);
+            await persistAssignmentAndForecast(nextAssign);
+          }}
+        >
+          <option value="">Select room</option>
+          {options.map((opt) => (
+            <option key={opt.value} value={opt.value}>
+              {opt.label}
+            </option>
+          ))}
+        </select>
+      </div>
+    );
+  };
+
+  // Folio totals & forms (AFTER handlers so ESLint is happy)
+  // --- FolioTotals component (replace older fragment) ---
+  const FolioTotals = () => {
+    const targetStatus = isBooked ? "forecast" : "posted";
+    const lines = visiblePostings.filter((p) => p.status === targetStatus && p.accountCode !== "PAY");
+    const chargesTotal = lines.reduce(
+      (sum, p) => sum + Number(p.amount || 0) + Number(p.tax || 0) + Number(p.service || 0),
+      0
+    );
+    const paysTotal = payments
+      .filter((p) => p.status !== "void" && p.status !== "refunded")
+      .reduce((sum, p) => sum + Number(p.amount || 0), 0);
+    const balance = chargesTotal - paysTotal;
+
+    return (
+      <div className="reservation-form folio" style={{ marginBottom: 12, width: "100%" }}>
+        <h4 style={{ marginBottom: 8 }}>Folio</h4>
+
+        <div className="folio-header">
+          <div className="h-desc">Description</div>
+          <div className="h-account">Account</div>
+          <div className="h-status">Status</div>
+          <div className="h-amount">Amount</div>
+        </div>
+
+        <div className="folio-lines">
+          {lines.length === 0 ? (
+            <div className="folio-empty">No charges yet.</div>
+          ) : (
+            lines.map((p) => (
+              <div key={p.id} className="folio-line">
+                <div className="f-desc">{p.description || "-"}</div>
+                <div className="f-account">{p.accountCode || "-"}</div>
+                <div className="f-status">{p.status || "-"}</div>
+                <div className="f-amount">
+                  {currency} {fmtMoney(Number(p.amount || 0) + Number(p.tax || 0) + Number(p.service || 0))}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        <div className="folio-totals">
+          <div className="tot-row">
+            <div className="t-label">Charges</div>
+            <div className="t-value">{currency} {fmtMoney(chargesTotal)}</div>
+          </div>
+          <div className="tot-row">
+            <div className="t-label">Payments</div>
+            <div className="t-value">{currency} {fmtMoney(paysTotal)}</div>
+          </div>
+          <div className="tot-row grand">
+            <div className="t-label">Balance</div>
+            <div className="t-value">{currency} {fmtMoney(balance)}</div>
+          </div>
+        </div>
+
+        {canOperate && (
+          <div className="form-actions" style={{ marginTop: 12, display: "flex", gap: 10 }}>
+            <button onClick={() => setShowAddCharge((s) => !s)}>Add charge</button>
+            <button onClick={() => setShowAddPayment((s) => !s)}>Add payment</button>
+            {isAdmin && <button style={{ marginLeft: 8 }} onClick={cancelReservation}>Cancel Reservation</button>}
+          </div>
+        )}
+
+        {showAddCharge && (
+          <div style={{ marginTop: 12 }}>
+            <h5>Add Charge</h5>
+            <div style={{ display: "grid", gap: 8 }}>
+              <input
+                placeholder="Description"
+                value={chargeForm.description}
+                onChange={(e) => setChargeForm({ ...chargeForm, description: e.target.value })}
+              />
+              <div style={{ display: "flex", gap: 8 }}>
+                <input
+                  placeholder="Qty"
+                  value={chargeForm.qtyStr}
+                  onChange={(e) => setChargeForm({ ...chargeForm, qtyStr: e.target.value })}
+                />
+                <input
+                  placeholder="Unit amount"
+                  value={chargeForm.unitStr}
+                  onChange={(e) => setChargeForm({ ...chargeForm, unitStr: e.target.value })}
+                />
+                <select
+                  value={chargeForm.accountCode}
+                  onChange={(e) => setChargeForm({ ...chargeForm, accountCode: e.target.value })}
+                >
+                  <option value="MISC">MISC</option>
+                  <option value="ROOM">ROOM</option>
+                  <option value="DEPOSIT">DEPOSIT</option>
+                  <option value="ADJ">ADJ</option>
+                </select>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={submitCharge}>Save charge</button>
+                <button onClick={() => setShowAddCharge(false)}>Cancel</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showAddPayment && (
+          <div style={{ marginTop: 12 }}>
+            <h5>Add Payment</h5>
+            <div style={{ display: "grid", gap: 8 }}>
+              <input
+                placeholder="Amount"
+                value={paymentForm.amountStr}
+                onChange={(e) => setPaymentForm({ ...paymentForm, amountStr: e.target.value })}
+              />
+              <div style={{ display: "flex", gap: 8 }}>
+                <select
+                  value={paymentForm.method}
+                  onChange={(e) => setPaymentForm({ ...paymentForm, method: e.target.value })}
+                >
+                  <option value="cash">Cash</option>
+                  <option value="card">Card</option>
+                  <option value="bank">Bank Transfer</option>
+                </select>
+                <input
+                  placeholder="Reference / notes"
+                  value={paymentForm.refNo}
+                  onChange={(e) => setPaymentForm({ ...paymentForm, refNo: e.target.value })}
+                />
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={submitPayment}>Save payment</button>
+                <button onClick={() => setShowAddPayment(false)}>Cancel</button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  if (loading || !reservation) {
+    return <div className="reservations-container"><h2>Reservation Detail</h2><div>Loading…</div></div>;
+  }
+
+  // ---- Render (single root) ----
+  return (
+  <div className="reservations-container">
+    <h2 style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+      <span>Reservation Detail</span>
+
+      {isAdmin && (
+  <button
+    onClick={() => navigate(`/reservations/${reservation.id}/edit`)}
+    style={{ backgroundColor: "#2563eb", color: "#fff", marginRight: "8px" }}
+  >
+    Edit Reservation
+  </button>
+)}
+
+
+      {/* TOP AREA - Admin-only Delete button placed in top area as requested */}
+      {isAdmin && (
+        <button className="btn btn-danger" onClick={handleDeleteReservation}>
+          Delete Reservation
+        </button>
+      )}
+    </h2>
+
+      {/* Summary */}
+      <div className="reservation-form" style={{ marginBottom: 12 }}>
+        <label>Guest</label>
+        <div>{reservation.guestName || "-"} {guest?.tier ? `(${guest.tier})` : ""}</div>
+        <label>Stay</label>
+        <div>{fmt(reservation.checkInDate)} → {fmt(reservation.checkOutDate)}</div>
+        <label>Status</label>
+        <div>{reservation.status}</div>
+        <label>Channel</label>
+        <div>{reservation.channel || "-"}</div>
+        <label>Assigned rooms</label>
+        <div>{Array.isArray(reservation.roomNumbers)
+          ? reservation.roomNumbers.join(", ")
+          : reservation.roomNumber || "-"}</div>
+      </div>
+
+      {/* Check-in / Pre-check-in upgrades */}
+      {((reservation.status || "").toLowerCase() === "booked") && (
+        <div className="reservation-form" style={{ marginBottom: 12 }}>
+          <h4>Check-In</h4>
+
+          <label>Assign rooms (locked by type per index)</label>
+          <div>
+            {(assignRooms.length ? assignRooms : [""]).map((_, idx) => renderAssignmentRow(idx))}
+          </div>
+
+          <div className="form-actions" style={{ marginTop: 8 }}>
+            {canOperate && (
+              <>
+                <button className="btn-primary" onClick={doCheckIn}>
+                  Check In
+                </button>
+                <button onClick={printCheckInForm} style={{ marginLeft: 8 }}>
+                  Print Check-In Form
+                </button>
+              </>
+            )}
+          </div>
+
+          {canUpgrade && assignRooms.length > 0 && (
+            <>
+              <h5 style={{ marginTop: 16 }}>Upgrade (different type, before check-in)</h5>
+              <label>Select room index to upgrade</label>
+              <select
+                value={upgradeIndex ?? ""}
+                onChange={(e) =>
+                  setUpgradeIndex(e.target.value === "" ? null : Number(e.target.value))
+                }
+              >
+                <option value="">Choose index</option>
+                {assignRooms.map((rm, i) => (
+                  <option key={i} value={i}>
+                    #{i + 1}: {rm || "(unassigned)"}
+                  </option>
+                ))}
+              </select>
+
+              {upgradeIndex != null && (
+                <>
+                  <label>New room (different type allowed)</label>
+                  <select
+                    value={upgradePreRoom}
+                    onChange={(e) => setUpgradePreRoom(e.target.value)}
+                  >
+                    <option value="">Select room</option>
+                    {preUpgradeOptions.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+
+                  <div className="form-actions" style={{ marginTop: 8 }}>
+                    <button
+                      className="btn-primary"
+                      onClick={doUpgradePreCheckIn}
+                      disabled={!upgradePreRoom}
+                    >
+                      Confirm Upgrade
+                    </button>
+                    <button
+                      style={{ marginLeft: 8 }}
+                      onClick={() => {
+                        setUpgradeIndex(null);
+                        setUpgradePreRoom("");
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {/* In-House controls (checked-in) */}
+      {stays.length > 0 && (
+        <>
+          <div className="reservation-form" style={{ marginBottom: 12 }}>
+            <h4>In-House</h4>
+
+            <label>Open stays</label>
+            <div>
+              {stays.filter((s) => s.status === "open").length
+                ? stays.filter((s) => s.status === "open").map((s) => s.roomNumber).join(", ")
+                : "-"}
+            </div>
+
+            <div className="form-actions" style={{ marginTop: 8 }}>
+              {canOperate && (reservation.status === "checked-in") && (
+                <>
+                  <button
+                    className="btn-primary"
+                    onClick={() => setMoveRoomStay(stays.find((s) => s.status === "open") || null)}
+                    disabled={!stays.some((s) => s.status === "open")}
+                  >
+                    Change Room (same type)
+                  </button>
+
+                  {canUpgrade && (
+                    <button
+                      className="btn-primary"
+                      style={{ marginLeft: 8 }}
+                      onClick={() => setUpgradeStay(stays.find((s) => s.status === "open") || null)}
+                      disabled={!stays.some((s) => s.status === "open")}
+                    >
+                      Upgrade Room (different type)
+                    </button>
+                  )}
+
+                  <button
+                    className="btn-primary"
+                    style={{ marginLeft: 8 }}
+                    onClick={doCheckOut}
+                    disabled={stays.every((s) => s.status !== "open")}
+                  >
+                    Check Out
+                  </button>
+
+                  <button style={{ marginLeft: 8 }} onClick={printCheckOutBill}>
+                    Print Check-Out Bill
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Change room panel */}
+          {moveRoomStay && (
+            <div className="reservation-form" style={{ marginBottom: 12 }}>
+              <label>Current room</label>
+              <div>{moveRoomStay.roomNumber}</div>
+
+              <label>New room (same type)</label>
+              <select value={newRoom} onChange={(e) => setNewRoom(e.target.value)}>
+                <option value="">Select room</option>
+                {sameTypeOptions.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+
+              <div className="form-actions">
+                <button className="btn-primary" onClick={doChangeRoom} disabled={!newRoom}>
+                  Confirm Change
+                </button>
+                <button
+                  style={{ marginLeft: 8 }}
+                  onClick={() => {
+                    setMoveRoomStay(null);
+                    setNewRoom("");
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Upgrade room panel */}
+          {canUpgrade && upgradeStay && (
+            <div className="reservation-form" style={{ marginBottom: 12 }}>
+              <label>Current room</label>
+              <div>{upgradeStay.roomNumber}</div>
+
+              <label>New room (different type allowed)</label>
+              <select value={upgradeRoom} onChange={(e) => setUpgradeRoom(e.target.value)}>
+                <option value="">Select room</option>
+                {upgradeOptions.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+
+              <div className="form-actions">
+                <button className="btn-primary" onClick={doUpgradeRoom} disabled={!upgradeRoom}>
+                  Confirm Upgrade
+                </button>
+                <button
+                  style={{ marginLeft: 8 }}
+                  onClick={() => {
+                    setUpgradeStay(null);
+                    setUpgradeRoom("");
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Folio */}
+      <FolioTotals />
+
+      {/* Printable section */}
+      <div
+        ref={printRef}
+        className="printable"
+        style={{ display: printMode ? "block" : "none", padding: 16 }}
+      >
+        {printMode === "checkin" && (
+          <div className="checkin-print">
+            {/* Header */}
+            <div className="hotel-header">
+              <div className="hotel-name">MILLENNIUM INN</div>
+              <div className="hotel-address">
+                Jl Kapten Muslim No 178<br />
+                Medan, Sumatera Utara, Indonesia
+              </div>
+              <div className="hotel-contact">
+                Telepon: {settings?.hotelPhone || "082217091699"} &nbsp;&nbsp; Fax: {settings?.hotelFax || "-"}
+                <br />
+                Web: {settings?.hotelWeb || "-"} &nbsp;&nbsp; Email: {settings?.hotelEmail || "fo.millennium1@gmail.com"}
+              </div>
+            </div>
+
+            <div className="doc-title">Check In</div>
+
+            {/* Top meta row */}
+            <div className="meta-grid">
+              <div>
+                <div className="label">Tanggal</div>
+                <div className="value">{fmtDMY(new Date())}</div>
+              </div>
+              <div>
+                <div className="label">No. Bukti</div>
+                <div className="value">{reservation?.code || reservation?.refNo || reservation?.id?.slice(0, 10) || "-"}</div>
+              </div>
+            </div>
+
+            {/* Guest and stay info */}
+            <div className="info-grid">
+              <div>
+                <div className="label">Tamu</div>
+                <div className="value">{reservation?.guestName || "-"}</div>
+              </div>
+              <div>
+                <div className="label">Perusahaan</div>
+                <div className="value">{reservation?.company || "-"}</div>
+              </div>
+              <div>
+                <div className="label">Alamat</div>
+                <div className="value">{guest?.address || reservation?.guestAddress || "-"}</div>
+              </div>
+              <div>
+                <div className="label">Kota</div>
+                <div className="value">{guest?.city || reservation?.guestCity || "-"}</div>
+              </div>
+              <div>
+                <div className="label">Telepon & Email</div>
+                <div className="value">
+                  {guest?.phone || reservation?.guestPhone || "-"} &nbsp;&nbsp; {guest?.email || reservation?.guestEmail || "-"}
+                </div>
+              </div>
+              <div>
+                <div className="label">Tgl CheckIn</div>
+                <div className="value">{fmtDMY(reservation?.checkInDate)}</div>
+              </div>
+              <div>
+                <div className="label">Tgl CheckOut</div>
+                <div className="value">{fmtDMY(reservation?.checkOutDate)}{reservation?.checkOutTime ? ` ${reservation.checkOutTime}` : ""}</div>
+              </div>
+              <div>
+                <div className="label">Hari</div>
+                <div className="value">{calcNights(reservation)} Malam</div>
+              </div>
+              <div>
+                <div className="label">Dewasa & Anak</div>
+                <div className="value">{adultsChildren(reservation, guest)}</div>
+              </div>
+              <div>
+                <div className="label">Keterangan</div>
+                <div className="value">{reservation?.note || "-"}</div>
+              </div>
+            </div>
+
+            {/* Line items table (single night block to mirror sample) */}
+            <div className="items-table">
+              <div className="thead">
+                <div className="th no">No.</div>
+                <div className="th date">Tanggal</div>
+                <div className="th desc">Keterangan</div>
+                <div className="th rate">Tarif</div>
+                <div className="th qty">Kuant</div>
+                <div className="th amt">Jumlah</div>
+              </div>
+
+              {(() => {
+                const roomNo = (assignRooms && assignRooms[0]) || reservation?.roomNumbers?.[0] || reservation?.roomNumber || "-";
+                const roomType = rooms.find(r => r.roomNumber === roomNo)?.roomType || reservation?.roomType || "-";
+                const stayDate = reservation?.checkInDate || new Date();
+
+                const firstForecastRoom = postings
+  .filter(p => (p.status || "posted") === "forecast" && p.accountCode === "ROOM")
+  .sort((a, b) => {
+    const ad = a.createdAt?.toDate ? a.createdAt.toDate() : new Date(a.createdAt || 0);
+    const bd = b.createdAt?.toDate ? b.createdAt.toDate() : new Date(b.createdAt || 0);
+    return ad - bd;
+  })[0];
+
+                const rate = (() => {
+                  // Try to find forecast posting for first night matching the room
+                  if (firstForecastRoom) {
+                    return Number(firstForecastRoom.amount || 0);
+                  }
+                  // fallback to rateFor or room default
+                  const ev = getEventForDate(new Date(stayDate));
+                  let base = rateFor(roomType, reservation.channel, new Date(stayDate));
+                  if ((!base || base <= 0) && roomNo) {
+                    const rdoc = rooms.find(rr => rr.roomNumber === roomNo);
+                    base = Number(rdoc?.defaultRate || rdoc?.rate || 0);
+                  }
+                  return Math.round(Number(base || 0));
+                })();
+
+                return (
+                  <div className="tbody">
+                    <div className="tr">
+                      <div className="td no">1</div>
+                      <div className="td date">{fmtDMY(stayDate)}</div>
+                      <div className="td desc">Room {roomType} ({roomNo})</div>
+                      <div className="td rate">{currency} {fmtMoney(rate)}</div>
+                      <div className="td qty">1</div>
+                      <div className="td amt">{currency} {fmtMoney(rate)}</div>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
+        )}
+
+        {printMode === "checkout" && (
+          <div className="checkout-print">
+            <h3>Check Out Bill</h3>
+            {/* we render a simplified bill */}
+            <div>
+              <div>Guest: {reservation?.guestName}</div>
+              <div>Period: {fmt(reservation.checkInDate)} → {fmt(reservation.checkOutDate)}</div>
+              <div style={{ marginTop: 12 }}>
+                {displayChargeLines.length === 0 ? <div>No charges</div> : (
+                  <div>
+                    {displayChargeLines.map((p) => (
+                      <div key={p.id} style={{ display: "flex", justifyContent: "space-between" }}>
+                        <div>{p.description}</div>
+                        <div>{currency} {fmtMoney(Number(p.amount || 0) + Number(p.tax || 0) + Number(p.service || 0))}</div>
+                      </div>
+                    ))}
+                    <hr />
+                    <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700 }}>
+                      <div>Total</div>
+                      <div>{currency} {fmtMoney(displayChargesTotal)}</div>
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between" }}>
+                      <div>Payments</div>
+                      <div>{currency} {fmtMoney(displayPaymentsTotal)}</div>
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8 }}>
+                      <div>Balance</div>
+                      <div>{currency} {fmtMoney(displayBalance)}</div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Delete modal (admin-only) - minimal inline styling; move to CSS later */}
+      {showDeleteModal && isAdmin && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{
+            position: "fixed",
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            background: "rgba(0,0,0,0.4)",
+            zIndex: 9999
+          }}
+        >
+          <div style={{
+            width: 520,
+            maxWidth: "90%",
+            background: "#fff",
+            borderRadius: 8,
+            padding: 18,
+            boxShadow: "0 6px 24px rgba(0,0,0,0.25)"
+          }}>
+            <h3 style={{ marginTop: 0 }}>Delete reservation</h3>
+            <p style={{ marginTop: 0, color: "#666" }}>
+              This action will move the reservation to the archive (deleted_reservations).
+              The reservation will no longer appear in the regular list. Please provide a reason:
+            </p>
+
+            <textarea
+              value={deleteReason}
+              onChange={(e) => setDeleteReason(e.target.value)}
+              placeholder="Reason for deleting this reservation (required)"
+              style={{
+                width: "100%",
+                minHeight: 90,
+                padding: 8,
+                borderRadius: 6,
+                border: "1px solid #ccc",
+                resize: "vertical",
+                marginBottom: 12
+              }}
+            />
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <button onClick={closeDeleteModal} disabled={deleting} style={{ background: "#eee", color: "#333", borderColor: "#ddd" }}>
+                Cancel
+              </button>
+              <button
+                onClick={deleteReservation}
+                disabled={deleting}
+                style={{ background: "#d9534f", color: "#fff", borderColor: "#d43f3a" }}
+              >
+                {deleting ? "Deleting…" : "Confirm Delete"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+{showDeleteModal && (
+  <div className="modal-overlay">
+    <div className="modal">
+      <h3>Delete Reservation</h3>
+      <p>Please provide a reason for deleting this reservation:</p>
+      <textarea
+        value={deleteReason}
+        onChange={(e) => setDeleteReason(e.target.value)}
+        rows="3"
+        style={{ width: "100%", padding: "8px" }}
+      />
+      <div style={{ marginTop: "12px", display: "flex", justifyContent: "flex-end", gap: "8px" }}>
+        <button onClick={() => setShowDeleteModal(false)} disabled={deleting}>
+          Cancel
+        </button>
+        <button
+          onClick={confirmDeleteReservation}
+          disabled={deleting}
+          style={{ backgroundColor: "#dc2626", color: "#fff" }}
+        >
+          {deleting ? "Deleting..." : "Confirm Delete"}
+        </button>
+      </div>
+    </div>
+  </div>
+)}
+
+    </div>
+  );
+}

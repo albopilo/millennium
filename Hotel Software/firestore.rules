@@ -1,0 +1,86 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Utility: Fetch effective permissions
+    function getEffectivePermissions() {
+      let userDoc = get(/databases/$(database)/documents/users/$(request.auth.uid));
+      let roleId = userDoc.data.roleId;
+      let roleDoc = get(/databases/$(database)/documents/roles/$(roleId));
+      let basePerms = roleDoc.data.permissions;
+      let grants = userDoc.data.grants;
+      let denies = userDoc.data.denies;
+      return (basePerms.concat(grants)).diff(denies);
+    }
+
+    function hasPermission(perm) {
+      return getEffectivePermissions().hasAny([perm, "*"]);
+    }
+
+    // Scoped permission check: canOverrideRates
+    function canOverrideRate(channelId) {
+      return hasPermission("canOverrideRates:" + channelId);
+    }
+
+    // Scoped permission check: canViewReports
+    function canViewReport(reportId) {
+      return hasPermission("canViewReports:" + reportId);
+    }
+
+    // -------------------------
+    // Reservations
+    // -------------------------
+    match /reservations/{resId} {
+      allow read: if hasPermission("canViewReservations");
+      allow create: if hasPermission("canCreateReservations");
+      allow update: if hasPermission("canEditReservations");
+      allow delete: if hasPermission("canCancelReservations");
+    }
+
+    // -------------------------
+    // Folios
+    // -------------------------
+    match /folios/{folioId} {
+      allow read: if hasPermission("canViewFolios");
+      allow update: if hasPermission("canPostCharges") || hasPermission("canPostPayments");
+    }
+
+    // -------------------------
+    // Work Orders
+    // -------------------------
+    match /workOrders/{woId} {
+      allow read: if hasPermission("canViewHousekeepingTasks") || hasPermission("canCreateWorkOrders");
+      allow create: if hasPermission("canCreateWorkOrders");
+      allow update: if hasPermission("canCloseWorkOrders") || hasPermission("canMarkRoomOutOfOrder");
+    }
+
+    // -------------------------
+    // POS Orders
+    // -------------------------
+    match /posOrders/{posId} {
+      allow read: if hasPermission("canUsePOS");
+      allow create: if hasPermission("canUsePOS");
+      allow update: if hasPermission("canPostToRoom") || hasPermission("canProcessTakeaway");
+    }
+
+    // -------------------------
+    // Reports
+    // -------------------------
+    match /reports/{reportId} {
+      allow read: if canViewReport(reportId);
+    }
+
+    // -------------------------
+    // Roles & Users (admin only)
+    // -------------------------
+    match /roles/{roleId} {
+      allow read: if hasPermission("*") || hasPermission("canEditRolesPermissions");
+      allow write: if hasPermission("*") || hasPermission("canEditRolesPermissions");
+    }
+
+    match /users/{uid} {
+      allow read: if request.auth.uid == uid || hasPermission("*") || hasPermission("canEditStaffAccounts");
+      allow write: if hasPermission("*") || hasPermission("canEditStaffAccounts");
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "users": {
+    "YD0Trsxo2SSbu3vOkDEdXDT3IsZ2": {
+      "displayName": "Edo",
+      "roleId": "admin",
+      "grants": [],
+      "denies": [],
+      "status": "active",
+      "lastLogin": "2025-08-25T03:45:00Z"
+    }
+  }
+}
