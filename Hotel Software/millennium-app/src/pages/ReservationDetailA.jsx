@@ -1287,18 +1287,24 @@ Proceed?`
     }
   };
 
-  // Print handlers: gate printing by reservation status
-  const printCheckInForm = () => {
-    if (!reservation || (reservation.status || "").toLowerCase() !== "checked-in") {
-      window.alert("Cannot print check-in form until reservation is checked-in.");
-      return;
-    }
-    setPrintMode("checkin");
-    setTimeout(() => {
-      window.print();
-      setPrintMode(null);
-    }, 50);
-  };
+// Print handlers: gate printing by reservation status
+const printCheckInForm = () => {
+  if (!reservation || (reservation.status || "").toLowerCase() !== "checked-in") {
+    window.alert("Cannot print check-in form until reservation is checked-in.");
+    return;
+  }
+
+  setPrintMode("checkin"); // show printable content
+
+  // Give React time to render before printing
+  setTimeout(() => {
+    window.print();
+
+    // Delay unmount until AFTER the print dialog has opened
+    setTimeout(() => setPrintMode(null), 300);
+  }, 80);
+};
+
 
   const printCheckOutBill = () => {
     if (!reservation || (reservation.status || "").toLowerCase() !== "checked-out") {

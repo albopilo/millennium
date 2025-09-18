@@ -197,3 +197,31 @@ button:disabled {
 .tot-row.grand .t-value {
   color: #b91c1c;
 }
+
+/* hide printable on screen (optional, keeps it out of UI) */
+.printable {
+  display: none;
+}
+
+/* when printing, hide everything then show printable */
+@media print {
+  /* hide the whole app */
+  body * {
+    visibility: hidden;
+  }
+
+  /* show only the printable area (and its children) */
+  .printable, .printable * {
+    visibility: visible;
+  }
+
+  /* put the printable content at the top-left so it prints by itself */
+  .printable {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    display: block;          /* ensure it's shown in print */
+  }
+}
+
