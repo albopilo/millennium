@@ -1,10 +1,16 @@
+require("dotenv").config();
 const admin = require("firebase-admin");
 
-// Download your service account key from Firebase Console > Project Settings > Service Accounts
-const serviceAccount = require("./serviceAccountKey.json");
+const serviceAccount = {
+  project_id: process.env.FIREBASE_PROJECT_ID,
+  private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID,
+  private_key: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+  client_email: process.env.FIREBASE_CLIENT_EMAIL,
+  client_id: process.env.FIREBASE_CLIENT_ID,
+};
 
 admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount)
+  credential: admin.credential.cert(serviceAccount),
 });
 
 async function setClaims(uid) {
@@ -25,5 +31,5 @@ async function setClaims(uid) {
   console.log(`Updated ${uid} with permissions:`, permissions);
 }
 
-// Replace with the UID of the staff account you want to update
+// Example run: replace UID with a real one
 setClaims("YD0Trsxo2SSbu3vOkDEdXDT3IsZ2").then(() => process.exit());
