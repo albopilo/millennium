@@ -172,10 +172,6 @@ const deleteReservation = async () => {
   // Delete Reservation handler (prompt-based quick handler kept as-is)
   const handleDeleteReservation = async () => {
     if (!isAdmin) return;
-    if (isNightAuditClosed(reservation)) {
-      alert("Cannot delete after night audit. Please use adjustments instead.");
-      return;
-    }
 
     const reason = prompt("Please enter a reason for deleting this reservation:");
     if (!reason) return;
@@ -1251,7 +1247,7 @@ Proceed?`
   };
 
   const doCheckOut = async () => {
-    if (isNightAuditClosed(reservation)) { window.alert("Cannot check out after night audit. Please contact admin."); return; }
+    
     if (displayBalance > 0.01 && !canOverrideBilling) {
       window.alert(`Cannot check out. Outstanding balance: ${currency} ${fmtMoney(displayBalance)}.`);
       return;
