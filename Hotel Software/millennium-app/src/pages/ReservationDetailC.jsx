@@ -301,163 +301,164 @@ export default function ReservationDetailC(props) {
     );
   }
 
-  // Printable + delete modal are rendered below; they also guard against missing reservation
+    // Printable + delete modal are rendered below; they also guard against missing reservation
   return (
     <div>
       {/* render internal FolioTotals (only once, here) */}
       <FolioTotals />
 
-     {/* Printable section */}
-<div
-  ref={printRef}
-  className="printable"
-  style={{ display: printMode ? "block" : "none", padding: 16, fontFamily: "Arial, sans-serif", fontSize: 13 }}
->
-  {/* HEADER */}
-  <div style={{ textAlign: "center", marginBottom: 12 }}>
-    <div style={{ fontSize: 20, fontWeight: 700 }}>MILLENNIUM INN</div>
-    <div>{settings?.hotelAddress || "Jl Kapten Muslim No 178, Medan"}</div>
-    <div>{settings?.hotelPhone || "Telp: (061) 1234567"}</div>
-    <hr style={{ margin: "12px 0" }} />
-  </div>
+      {/* Printable section: only render if printMode is active */}
+      {printMode && (
+        <div
+          ref={printRef}
+          className="printable"
+          style={{ padding: 16, fontFamily: "Arial, sans-serif", fontSize: 13 }}
+        >
+          {/* HEADER */}
+          <div style={{ textAlign: "center", marginBottom: 12 }}>
+            <div style={{ fontSize: 20, fontWeight: 700 }}>MILLENNIUM INN</div>
+            <div>{settings?.hotelAddress || "Jl Kapten Muslim No 178, Medan"}</div>
+            <div>{settings?.hotelPhone || "Telp: (061) 1234567"}</div>
+            <hr style={{ margin: "12px 0" }} />
+          </div>
 
-  {/* CHECK-IN FORM */}
-  {printMode === "checkin" && (
-    <div>
-      <h3 style={{ textAlign: "center", marginBottom: 16 }}>FORMULIR CHECK-IN</h3>
+          {/* CHECK-IN FORM */}
+          {printMode === "checkin" && (
+            <div>
+              <h3 style={{ textAlign: "center", marginBottom: 16 }}>FORMULIR CHECK-IN</h3>
+              {/* Guest Info */}
+              <table style={{ width: "100%", marginBottom: 12 }}>
+                <tbody>
+                  <tr>
+                    <td><strong>Tamu</strong></td>
+                    <td>{reservation?.guestName || "-"}</td>
+                    <td><strong>Perusahaan</strong></td>
+                    <td>{reservation?.company || "-"}</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Alamat</strong></td>
+                    <td>{guest?.address || reservation?.guestAddress || "-"}</td>
+                    <td><strong>Kota</strong></td>
+                    <td>{guest?.city || reservation?.guestCity || "-"}</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Telepon</strong></td>
+                    <td>{guest?.phone || reservation?.guestPhone || "-"}</td>
+                    <td><strong>Email</strong></td>
+                    <td>{guest?.email || reservation?.guestEmail || "-"}</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Tgl Check-In</strong></td>
+                    <td>{fmt(reservation?.checkInDate)}</td>
+                    <td><strong>Tgl Check-Out</strong></td>
+                    <td>{fmt(reservation?.checkOutDate)}</td>
+                  </tr>
+                  <tr>
+                    <td><strong>Lama</strong></td>
+                    <td>{calcNights(reservation)} Malam</td>
+                    <td><strong>Dewasa/Anak</strong></td>
+                    <td>{adultsChildren(reservation)}</td>
+                  </tr>
+                </tbody>
+              </table>
 
-      {/* Guest Info */}
-      <table style={{ width: "100%", marginBottom: 12 }}>
-        <tbody>
-          <tr>
-            <td><strong>Tamu</strong></td>
-            <td>{reservation?.guestName || "-"}</td>
-            <td><strong>Perusahaan</strong></td>
-            <td>{reservation?.company || "-"}</td>
-          </tr>
-          <tr>
-            <td><strong>Alamat</strong></td>
-            <td>{guest?.address || reservation?.guestAddress || "-"}</td>
-            <td><strong>Kota</strong></td>
-            <td>{guest?.city || reservation?.guestCity || "-"}</td>
-          </tr>
-          <tr>
-            <td><strong>Telepon</strong></td>
-            <td>{guest?.phone || reservation?.guestPhone || "-"}</td>
-            <td><strong>Email</strong></td>
-            <td>{guest?.email || reservation?.guestEmail || "-"}</td>
-          </tr>
-          <tr>
-            <td><strong>Tgl Check-In</strong></td>
-            <td>{fmt(reservation?.checkInDate)}</td>
-            <td><strong>Tgl Check-Out</strong></td>
-            <td>{fmt(reservation?.checkOutDate)}</td>
-          </tr>
-          <tr>
-            <td><strong>Lama</strong></td>
-            <td>{calcNights(reservation)} Malam</td>
-            <td><strong>Dewasa/Anak</strong></td>
-            <td>{adultsChildren(reservation)}</td>
-          </tr>
-        </tbody>
-      </table>
+              {/* Room List */}
+              <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 12 }} border="1" cellPadding="6">
+                <thead>
+                  <tr style={{ background: "#f2f2f2" }}>
+                    <th>No</th>
+                    <th>Kamar</th>
+                    <th>Tipe</th>
+                    <th>Tarif / Malam</th>
+                    <th>Subtotal</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {reservation?.roomNumbers?.map((roomNo, idx) => {
+                    const roomType = rooms.find(r => r.roomNumber === roomNo)?.roomType || "-";
+                    const rate = Math.round(Number(rateFor(roomType, reservation?.channel, new Date(reservation.checkInDate?.toDate?.() || reservation.checkInDate))) || 0);
+                    return (
+                      <tr key={roomNo}>
+                        <td>{idx + 1}</td>
+                        <td>{roomNo}</td>
+                        <td>{roomType}</td>
+                        <td>{currency} {fmtMoney(rate)}</td>
+                        <td>{currency} {fmtMoney(rate * calcNights(reservation))}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
 
-      {/* Room List */}
-      <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 12 }} border="1" cellPadding="6">
-        <thead>
-          <tr style={{ background: "#f2f2f2" }}>
-            <th>No</th>
-            <th>Kamar</th>
-            <th>Tipe</th>
-            <th>Tarif / Malam</th>
-            <th>Subtotal</th>
-          </tr>
-        </thead>
-        <tbody>
-          {reservation?.roomNumbers?.map((roomNo, idx) => {
-            const roomType = rooms.find(r => r.roomNumber === roomNo)?.roomType || "-";
-            const rate = Math.round(Number(rateFor(roomType, reservation?.channel, new Date(reservation.checkInDate?.toDate?.() || reservation.checkInDate))) || 0);
-            return (
-              <tr key={roomNo}>
-                <td>{idx + 1}</td>
-                <td>{roomNo}</td>
-                <td>{roomType}</td>
-                <td>{currency} {fmtMoney(rate)}</td>
-                <td>{currency} {fmtMoney(rate * calcNights(reservation))}</td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+              {/* Totals */}
+              <div style={{ textAlign: "right", marginBottom: 24 }}>
+                <div>Subtotal: {currency} {fmtMoney(computedChargesTotal)}</div>
+                <div>Deposit: {currency} {fmtMoney(computedDepositTotal)}</div>
+              </div>
 
-      {/* Totals */}
-      <div style={{ textAlign: "right", marginBottom: 24 }}>
-        <div>Subtotal: {currency} {fmtMoney(computedChargesTotal)}</div>
-        <div>Deposit: {currency} {fmtMoney(computedDepositTotal)}</div>
-      </div>
+              {/* Signatures */}
+              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 40 }}>
+                <div style={{ textAlign: "center", width: "40%" }}>
+                  <div>____________________</div>
+                  <div>Tanda Tangan Tamu</div>
+                </div>
+                <div style={{ textAlign: "center", width: "40%" }}>
+                  <div>____________________</div>
+                  <div>Petugas ({reservation?.createdBy || "Hotel Staff"})</div>
+                </div>
+              </div>
+            </div>
+          )}
 
-      {/* Signatures */}
-      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 40 }}>
-        <div style={{ textAlign: "center", width: "40%" }}>
-          <div>____________________</div>
-          <div>Tanda Tangan Tamu</div>
+          {/* CHECK-OUT BILL */}
+          {printMode === "checkout" && (
+            <div>
+              <h3 style={{ textAlign: "center", marginBottom: 16 }}>CHECK-OUT BILL</h3>
+              {/* Folio Breakdown */}
+              <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 12 }} border="1" cellPadding="6">
+                <thead>
+                  <tr style={{ background: "#f2f2f2" }}>
+                    <th>Description</th>
+                    <th>Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {lines.map((p, idx) => (
+                    <tr key={p.id || idx}>
+                      <td>{p.description}</td>
+                      <td style={{ textAlign: "right" }}>
+                        {currency} {fmtMoney(Number(p.amount || 0) + Number(p.tax || 0) + Number(p.service || 0))}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              {/* Totals */}
+              <div style={{ textAlign: "right", marginBottom: 24 }}>
+                <div>Total Charges: {currency} {fmtMoney(computedChargesTotal)}</div>
+                <div>Payments: {currency} {fmtMoney(computedPaymentsTotal)}</div>
+                <div>Deposit: {currency} {fmtMoney(computedDepositTotal)}</div>
+                <div style={{ fontWeight: 700, marginTop: 8 }}>
+                  Balance: {currency} {fmtMoney(computedBalance)}
+                </div>
+              </div>
+
+              {/* Signatures */}
+              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 40 }}>
+                <div style={{ textAlign: "center", width: "40%" }}>
+                  <div>____________________</div>
+                  <div>Tanda Tangan Tamu</div>
+                </div>
+                <div style={{ textAlign: "center", width: "40%" }}>
+                  <div>____________________</div>
+                  <div>Petugas ({reservation?.createdBy || "Hotel Staff"})</div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
-        <div style={{ textAlign: "center", width: "40%" }}>
-          <div>____________________</div>
-          <div>Petugas ({reservation?.createdBy || "Hotel Staff"})</div>
-        </div>
-      </div>
-    </div>
-  )}
-
-  {/* CHECK-OUT BILL */}
-  {printMode === "checkout" && (
-    <div>
-      <h3 style={{ textAlign: "center", marginBottom: 16 }}>CHECK-OUT BILL</h3>
-
-      {/* Folio Breakdown */}
-      <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 12 }} border="1" cellPadding="6">
-        <thead>
-          <tr style={{ background: "#f2f2f2" }}>
-            <th>Description</th>
-            <th>Amount</th>
-          </tr>
-        </thead>
-        <tbody>
-          {lines.map((p, idx) => (
-            <tr key={p.id || idx}>
-              <td>{p.description}</td>
-              <td style={{ textAlign: "right" }}>
-                {currency} {fmtMoney(Number(p.amount || 0) + Number(p.tax || 0) + Number(p.service || 0))}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-
-      {/* Totals */}
-      <div style={{ textAlign: "right", marginBottom: 24 }}>
-        <div>Total Charges: {currency} {fmtMoney(computedChargesTotal)}</div>
-        <div>Payments: {currency} {fmtMoney(computedPaymentsTotal)}</div>
-        <div>Deposit: {currency} {fmtMoney(computedDepositTotal)}</div>
-        <div style={{ fontWeight: 700, marginTop: 8 }}>Balance: {currency} {fmtMoney(computedBalance)}</div>
-      </div>
-
-      {/* Signatures */}
-      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 40 }}>
-        <div style={{ textAlign: "center", width: "40%" }}>
-          <div>____________________</div>
-          <div>Tanda Tangan Tamu</div>
-        </div>
-        <div style={{ textAlign: "center", width: "40%" }}>
-          <div>____________________</div>
-          <div>Petugas ({reservation?.createdBy || "Hotel Staff"})</div>
-        </div>
-      </div>
-    </div>
-  )}
-</div>
-
+      )}
     </div>
   );
 }
