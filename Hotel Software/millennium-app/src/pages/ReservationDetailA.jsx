@@ -24,16 +24,7 @@ export default function ReservationDetail({ permissions = [], currentUser = null
   const navigate = useNavigate();
   const { id } = useParams();
 
-    // Permissions
-  const can = (p) => permissions.includes(p) || permissions.includes("*");
-  const canUpgrade = can("canUpgradeRoom") || can("canOverrideRoomType");
-  const canOperate = can("canOperateFrontDesk") || can("canEditReservations");
-  const canOverrideBilling = can("canOverrideBilling");
 
-
-  // Compute once so children don’t need to guess
-  const resStatus = (reservation?.status || "").toLowerCase();
-  const canOperateNow = canOperate && resStatus !== "checked-out";
 
 
   // Actor and admin
@@ -57,6 +48,17 @@ export default function ReservationDetail({ permissions = [], currentUser = null
   const [guest, setGuest] = useState(null);
   const [settings, setSettings] = useState({ currency: "IDR", depositPerRoom: 0 });
   const [channels, setChannels] = useState([]);
+
+      // Permissions
+  const can = (p) => permissions.includes(p) || permissions.includes("*");
+  const canUpgrade = can("canUpgradeRoom") || can("canOverrideRoomType");
+  const canOperate = can("canOperateFrontDesk") || can("canEditReservations");
+  const canOverrideBilling = can("canOverrideBilling");
+
+
+  // Compute once so children don’t need to guess
+  const resStatus = (reservation?.status || "").toLowerCase();
+  const canOperateNow = canOperate && resStatus !== "checked-out";
 
   // UI state
   const [loading, setLoading] = useState(false);
