@@ -1,17 +1,8 @@
-// src/pages/ReservationDetailC.jsx
-import React from "react";
-
-// NOTE: This component is a self-contained presentational + printable Folio.
-// Changes in this version:
-// - Exposes printCheckInForm / printCheckOutBill props and renders Print buttons
-//   in the folio area depending on reservation.status.
-// - Makes the payment amount input more resilient (text input + inputMode numeric,
-//   and uses functional state updates for setPaymentForm to avoid stale closures).
-// - Computes deposit total from existing non-void DEPOSIT postings (defensive).
-// - Defensive defaults to avoid crashes when props are missing.
+import React, { useEffect, useState } from "react";
+import { doc, getDoc } from "firebase/firestore";
+import { db } from "../firebase";
 
 export default function ReservationDetailC(props) {
-  // destructure props and give safe defaults
   const {
     // printable
     printRef,
@@ -22,7 +13,7 @@ export default function ReservationDetailC(props) {
     // reservation + related data (may be undefined initially)
     reservation = null,
     settings = {},
-    fmtDMY = (d) => (d ? new Date(d).toLocaleDateString() : "-"),
+    fmt = (d) => (d ? new Date(d).toLocaleString() : "-"),
     calcNights = () => 0,
     adultsChildren = () => "-",
     assignRooms = [],
@@ -36,8 +27,8 @@ export default function ReservationDetailC(props) {
     fmtMoney = (n) => (isNaN(n) ? "-" : Number(n).toLocaleString("id-ID")),
 
     // folio props (either parent computed or we'll compute fallback)
-    visiblePostings = null, // optional, array of postings
-    displayChargeLines = null, // optional pre-computed lines
+    visiblePostings = null,
+    displayChargeLines = null,
     displayChargesTotal = null,
     displayPaymentsTotal = null,
     displayBalance = null,
@@ -59,7 +50,7 @@ export default function ReservationDetailC(props) {
     cancelReservation = () => {},
     isAdmin = false,
 
-    // delete modal stuff
+    // delete modal stuff (keep if parent uses)
     showDeleteModal = false,
     deleteReason = "",
     setDeleteReason = () => {},
@@ -67,48 +58,84 @@ export default function ReservationDetailC(props) {
     closeDeleteModal = () => {},
     deleteReservation = async () => {},
     confirmDeleteReservation = async () => {},
-    // additional missing values previously causing no-undef
-    guest,
-    fmt,
 
-    // extra: display totals if parent provided, else compute
+    // additional
+    guest,
+
+    // payments array passed from parent
     payments = [],
+
+    // logging callback: implement logging (who/where) in ReservationDetailB.jsx or parent
+    logReservationChange = () => {},
   } = props;
 
-  // Defensive local helpers
+  // 🔹 NEW: load print template config
+  const [templateConfig, setTemplateConfig] = useState({
+    header: "MILLENNIUM INN",
+    footer: "Thank you for staying with us!",
+    showPaymentBreakdown: true,
+    paymentTypes: ["Cash", "QRIS", "OTA", "Debit", "Credit"],
+  });
+
+  useEffect(() => {
+    async function loadTemplate() {
+      try {
+        const snap = await getDoc(doc(db, "settings", "printTemplates"));
+        if (snap.exists()) {
+          const data = snap.data();
+          setTemplateConfig((prev) => ({ ...prev, ...data }));
+        }
+      } catch (err) {
+        console.error("Failed to load printTemplates:", err);
+      }
+    }
+    loadTemplate();
+  }, []);
+
+  // Defensive posted lines selection (fallback precedence)
   const safeVisiblePostings = Array.isArray(displayChargeLines)
     ? displayChargeLines
     : Array.isArray(visiblePostings)
     ? visiblePostings
     : Array.isArray(postings)
-    ? postings.filter((p) => (p.status || "posted") !== "void")
+    ? postings.filter((p) => ((p.status || "posted") + "").toLowerCase() !== "void")
     : [];
 
-  // If displayChargeLines provided explicitly use it; otherwise compute targetStatus + filter
-  const isBooked = (reservation?.status || "").toLowerCase() === "booked";
+  const isBooked = ((reservation?.status || "") + "").toLowerCase() === "booked";
   const targetStatus = isBooked ? "forecast" : "posted";
 
-  const lines =
-    Array.isArray(displayChargeLines) ?
-      displayChargeLines :
-      safeVisiblePostings.filter((p) => ((p.status || "") + "").toLowerCase() === targetStatus && (p.accountCode || "") !== "PAY");
+  // Base lines selection (we exclude PAY lines as before)
+  let baseLines =
+    Array.isArray(displayChargeLines)
+      ? displayChargeLines
+      : safeVisiblePostings.filter(
+          (p) =>
+            (((p.status || "") + "").toLowerCase() === targetStatus ||
+              (((p.status || "") + "").toLowerCase() === "posted" && targetStatus === "posted")) &&
+            ((p.accountCode || "") + "").toUpperCase() !== "PAY"
+        );
 
-  // Totals (use provided totals if present; otherwise compute)
+  // IMPORTANT: exclude DEPOSIT from "charges" — deposits are not revenue
+  const lines = baseLines.filter((p) => ((p.accountCode || "") + "").toUpperCase() !== "DEPOSIT");
+
+  // Totals (charges exclude DEPOSIT now)
   const computedChargesTotal =
     typeof displayChargesTotal === "number"
       ? displayChargesTotal
       : lines.reduce((sum, p) => sum + Number(p.amount || 0) + Number(p.tax || 0) + Number(p.service || 0), 0);
 
+  // valid payments: exclude void/refunded
+  const validPayments = Array.isArray(payments)
+    ? payments.filter((p) => {
+        const st = ((p.status || "") + "").toLowerCase();
+        return st !== "void" && st !== "refunded";
+      })
+    : [];
+
   const computedPaymentsTotal =
     typeof displayPaymentsTotal === "number"
       ? displayPaymentsTotal
-      : (Array.isArray(payments) ? payments.filter((p) => p.status !== "void" && p.status !== "refunded") : []).reduce(
-          (sum, p) => sum + Number(p.amount || 0),
-          0
-        );
-
-  const computedBalance =
-    typeof displayBalance === "number" ? displayBalance : computedChargesTotal - computedPaymentsTotal;
+      : validPayments.reduce((sum, p) => sum + Number(p.amount || 0), 0);
 
   // deposit computed from existing (non-void) DEPOSIT postings for accuracy
   const computedDepositTotal = postings
@@ -119,9 +146,120 @@ export default function ReservationDetailC(props) {
     )
     .reduce((sum, p) => sum + Number(p.amount || 0), 0);
 
+  // Balance (assume deposit returned at checkout, so subtract it)
+  const computedBalance =
+    typeof displayBalance === "number"
+      ? displayBalance
+      : computedChargesTotal - computedPaymentsTotal - computedDepositTotal;
+
+  // Helper to normalize payment method strings into canonical types used by the template
+  function mapMethodToType(method) {
+    if (!method) return "Other";
+    const m = (method + "").toLowerCase();
+    if (m.includes("cash")) return "Cash";
+    if (m.includes("qris") || m.includes("qr") || m.includes("qrcode")) return "QRIS";
+    if (m.includes("ota")) return "OTA";
+    if (m.includes("debit")) return "Debit";
+    if (m.includes("credit")) return "Credit";
+    if (m.includes("card")) return "Credit";
+    if (m.includes("bank") || m.includes("transfer") || m.includes("va")) return "Bank";
+    return "Other";
+  }
+
+  // Compute paymentsByType in a robust way by mapping each payment to a canonical label
+  const paymentsByType = {};
+  const typesList = Array.isArray(templateConfig.paymentTypes)
+    ? templateConfig.paymentTypes.slice()
+    : ["Cash", "QRIS", "OTA", "Debit", "Credit"];
+
+  // initialize
+  for (const t of typesList) paymentsByType[t] = 0;
+  paymentsByType["Other"] = paymentsByType["Other"] || 0;
+
+  for (const p of validPayments) {
+    const t = mapMethodToType(p.method || p.type || "");
+    if (!paymentsByType[t] && typesList.indexOf(t) === -1) paymentsByType[t] = 0;
+    paymentsByType[t] = (paymentsByType[t] || 0) + Number(p.amount || 0);
+  }
+
+  // action wrappers that also call the logging callback (logger should be provided by ReservationDetailB.jsx)
+  const handleSubmitCharge = async () => {
+    const snapshot = { ...chargeForm };
+    try {
+      await submitCharge();
+      if (typeof logReservationChange === "function") {
+        logReservationChange({
+          reservationId: reservation?.id || reservation?.reservationId || null,
+          action: "add_charge",
+          data: snapshot,
+          ts: Date.now(),
+        });
+      }
+    } catch (err) {
+      console.error("submitCharge failed:", err);
+      throw err;
+    }
+  };
+
+  const handleSubmitPayment = async () => {
+    const snapshot = { ...paymentForm };
+    try {
+      await submitPayment();
+      if (typeof logReservationChange === "function") {
+        logReservationChange({
+          reservationId: reservation?.id || reservation?.reservationId || null,
+          action: "add_payment",
+          data: snapshot,
+          ts: Date.now(),
+        });
+      }
+    } catch (err) {
+      console.error("submitPayment failed:", err);
+      throw err;
+    }
+  };
+
+  const handleCancelReservation = async () => {
+    try {
+      await cancelReservation();
+      if (typeof logReservationChange === "function") {
+        logReservationChange({
+          reservationId: reservation?.id || reservation?.reservationId || null,
+          action: "cancel_reservation",
+          data: { reason: deleteReason || null },
+          ts: Date.now(),
+        });
+      }
+    } catch (err) {
+      console.error("cancelReservation failed:", err);
+      throw err;
+    }
+  };
+
+  const handleCheckout = async () => {
+    try {
+      if (typeof props.checkoutReservation === "function") {
+        await props.checkoutReservation();
+        if (typeof logReservationChange === "function") {
+          logReservationChange({
+            reservationId: reservation?.id || reservation?.reservationId || null,
+            action: "checkout",
+            data: null,
+            ts: Date.now(),
+          });
+        }
+      }
+    } catch (err) {
+      console.error("checkoutReservation failed:", err);
+      throw err;
+    }
+  };
+
   // inner FolioTotals component (defensive)
   function FolioTotals() {
     const resStatus = ((reservation?.status || "") + "").toLowerCase();
+    const isCheckedOut = resStatus === "checked-out";
+    const isCheckedIn = resStatus === "checked-in";
 
     return (
       <div className="reservation-form folio" style={{ marginBottom: 12, width: "100%" }}>
@@ -172,7 +310,8 @@ export default function ReservationDetailC(props) {
 
         {/* Actions: show Print buttons depending on reservation status */}
         <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {canOperate && (
+          {/* Add charge/payment not allowed after checkout */}
+          {canOperate && !isCheckedOut && (
             <>
               <button onClick={() => (typeof setShowAddCharge === "function" ? setShowAddCharge((s) => !s) : null)}>
                 Add charge
@@ -183,24 +322,32 @@ export default function ReservationDetailC(props) {
             </>
           )}
 
-          {/* Print Check-in Form: only visible when reservation is checked-in */}
+          {/* Checkout button: visible when checked-in; also shown (disabled) when checked-out per request */}
+          {canOperate && (
+            <button onClick={handleCheckout} disabled={isCheckedOut || !canOperate}>
+              {isCheckedOut ? "Checkout (already checked-out)" : "Checkout"}
+            </button>
+          )}
+
+          {/* Print Check-in Form */}
           {resStatus === "checked-in" && typeof printCheckInForm === "function" && (
             <button onClick={printCheckInForm}>Print Check-in Form</button>
           )}
 
-          {/* Print Check-out Bill: only visible when reservation is checked-out */}
+          {/* Print Check-out Bill */}
           {resStatus === "checked-out" && typeof printCheckOutBill === "function" && (
             <button onClick={printCheckOutBill}>Print Check-out Bill</button>
           )}
 
-          {isAdmin && (
-            <button style={{ marginLeft: 8 }} onClick={cancelReservation}>
+          {/* Cancel allowed only if not checked-out */}
+          {isAdmin && !isCheckedOut && (
+            <button style={{ marginLeft: 8 }} onClick={handleCancelReservation}>
               Cancel Reservation
             </button>
           )}
         </div>
 
-        {showAddCharge && (
+        {showAddCharge && !isCheckedOut && (
           <div style={{ marginTop: 12 }}>
             <h5>Add Charge</h5>
             <div style={{ display: "grid", gap: 8 }}>
@@ -231,27 +378,23 @@ export default function ReservationDetailC(props) {
                 </select>
               </div>
               <div style={{ display: "flex", gap: 8 }}>
-                <button onClick={submitCharge}>Save charge</button>
+                <button onClick={handleSubmitCharge}>Save charge</button>
                 <button onClick={() => setShowAddCharge(false)}>Cancel</button>
               </div>
             </div>
           </div>
         )}
 
-        {showAddPayment && (
+        {showAddPayment && !isCheckedOut && (
           <div style={{ marginTop: 12 }}>
             <h5>Add Payment</h5>
             <div style={{ display: "grid", gap: 8 }}>
               <input
                 placeholder="Amount"
-                // use text input + inputMode numeric to allow flexible edits (no coercion on every keystroke)
                 type="text"
                 inputMode="numeric"
                 value={paymentForm.amountStr}
-                onChange={(e) =>
-                  // functional update to avoid stale closure issues if parent passes a setter
-                  setPaymentForm((prev) => ({ ...prev, amountStr: e.target.value }))
-                }
+                onChange={(e) => setPaymentForm((prev) => ({ ...prev, amountStr: e.target.value }))}
               />
               <div style={{ display: "flex", gap: 8 }}>
                 <select
@@ -261,6 +404,8 @@ export default function ReservationDetailC(props) {
                   <option value="cash">Cash</option>
                   <option value="card">Card</option>
                   <option value="bank">Bank Transfer</option>
+                  <option value="qris">QRIS</option>
+                  <option value="ota">OTA</option>
                 </select>
                 <input
                   placeholder="Reference / notes"
@@ -271,22 +416,15 @@ export default function ReservationDetailC(props) {
               <div style={{ display: "flex", gap: 8 }}>
                 <button
                   onClick={async () => {
-                    // call parent submitPayment (parent is responsible for validation and clearing)
-                    await submitPayment();
-                    // after submit, ensure local input is cleared if parent didn't (best-effort defensive)
-                    try {
-                      setPaymentForm((prev) => ({ ...prev, amountStr: "" }));
-                      setShowAddPayment(false);
-                    } catch (e) {
-                      // ignore
-                    }
+                    await handleSubmitPayment();
+                    setPaymentForm((prev) => ({ ...prev, amountStr: "" }));
+                    setShowAddPayment(false);
                   }}
                 >
                   Save payment
                 </button>
                 <button
                   onClick={() => {
-                    // clear local payment form
                     setPaymentForm((prev) => ({ ...prev, amountStr: "", refNo: "" }));
                     setShowAddPayment(false);
                   }}
@@ -301,7 +439,7 @@ export default function ReservationDetailC(props) {
     );
   }
 
-    // Printable + delete modal are rendered below; they also guard against missing reservation
+  // Printable + delete modal are rendered below
   return (
     <div>
       {/* render internal FolioTotals (only once, here) */}
@@ -316,7 +454,7 @@ export default function ReservationDetailC(props) {
         >
           {/* HEADER */}
           <div style={{ textAlign: "center", marginBottom: 12 }}>
-            <div style={{ fontSize: 20, fontWeight: 700 }}>MILLENNIUM INN</div>
+            <div style={{ fontSize: 20, fontWeight: 700 }}>{templateConfig.header}</div>
             <div>{settings?.hotelAddress || "Jl Kapten Muslim No 178, Medan"}</div>
             <div>{settings?.hotelPhone || "Telp: (061) 1234567"}</div>
             <hr style={{ margin: "12px 0" }} />
@@ -362,7 +500,7 @@ export default function ReservationDetailC(props) {
                 </tbody>
               </table>
 
-              {/* Room List */}
+              {/* Room + Deposit Table */}
               <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 12 }} border="1" cellPadding="6">
                 <thead>
                   <tr style={{ background: "#f2f2f2" }}>
@@ -375,37 +513,71 @@ export default function ReservationDetailC(props) {
                 </thead>
                 <tbody>
                   {reservation?.roomNumbers?.map((roomNo, idx) => {
-                    const roomType = rooms.find(r => r.roomNumber === roomNo)?.roomType || "-";
-                    const rate = Math.round(Number(rateFor(roomType, reservation?.channel, new Date(reservation.checkInDate?.toDate?.() || reservation.checkInDate))) || 0);
+                    const roomType =
+                      rooms.find((r) => r.roomNumber === roomNo)?.roomType || "-";
+                    const rate = Math.round(
+                      Number(
+                        rateFor(
+                          roomType,
+                          reservation?.channel,
+                          new Date(
+                            reservation.checkInDate?.toDate?.() ||
+                              reservation.checkInDate
+                          )
+                        )
+                      ) || 0
+                    );
                     return (
                       <tr key={roomNo}>
                         <td>{idx + 1}</td>
                         <td>{roomNo}</td>
                         <td>{roomType}</td>
-                        <td>{currency} {fmtMoney(rate)}</td>
-                        <td>{currency} {fmtMoney(rate * calcNights(reservation))}</td>
+                        <td style={{ textAlign: "right" }}>
+                          {currency} {fmtMoney(rate)}
+                        </td>
+                        <td style={{ textAlign: "right" }}>
+                          {currency} {fmtMoney(rate * calcNights(reservation))}
+                        </td>
                       </tr>
                     );
                   })}
+
+                  {/* Deposit Row */}
+                  {computedDepositTotal > 0 && (
+                    <tr>
+                      <td colSpan={4}>
+                        <strong>Deposit</strong>
+                      </td>
+                      <td style={{ textAlign: "right" }}>
+                        {currency} {fmtMoney(computedDepositTotal)}
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
 
               {/* Totals */}
               <div style={{ textAlign: "right", marginBottom: 24 }}>
-                <div>Subtotal: {currency} {fmtMoney(computedChargesTotal)}</div>
-                <div>Deposit: {currency} {fmtMoney(computedDepositTotal)}</div>
-              </div>
-
-              {/* Signatures */}
-              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 40 }}>
-                <div style={{ textAlign: "center", width: "40%" }}>
-                  <div>____________________</div>
-                  <div>Tanda Tangan Tamu</div>
+                <div>
+                  <strong>Grand Total:</strong> {currency} {fmtMoney(computedChargesTotal)}
                 </div>
-                <div style={{ textAlign: "center", width: "40%" }}>
-                  <div>____________________</div>
-                  <div>Petugas ({reservation?.createdBy || "Hotel Staff"})</div>
-                </div>
+                {templateConfig.showPaymentBreakdown && (
+                  <div style={{ marginTop: 12, textAlign: "left" }}>
+                    <h4>Payment Breakdown</h4>
+                    <table style={{ width: "100%", borderCollapse: "collapse" }} border="1" cellPadding="6">
+                      <tbody>
+                        {templateConfig.paymentTypes.map((type) => (
+                          <tr key={type}>
+                            <td>{type}</td>
+                            <td style={{ textAlign: "right" }}>
+                              {currency} {fmtMoney(paymentsByType[type] || 0)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -414,12 +586,13 @@ export default function ReservationDetailC(props) {
           {printMode === "checkout" && (
             <div>
               <h3 style={{ textAlign: "center", marginBottom: 16 }}>CHECK-OUT BILL</h3>
-              {/* Folio Breakdown */}
+
+              {/* Charges Table */}
               <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 12 }} border="1" cellPadding="6">
                 <thead>
                   <tr style={{ background: "#f2f2f2" }}>
                     <th>Description</th>
-                    <th>Amount</th>
+                    <th style={{ textAlign: "right" }}>Amount</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -427,34 +600,83 @@ export default function ReservationDetailC(props) {
                     <tr key={p.id || idx}>
                       <td>{p.description}</td>
                       <td style={{ textAlign: "right" }}>
-                        {currency} {fmtMoney(Number(p.amount || 0) + Number(p.tax || 0) + Number(p.service || 0))}
+                        {currency}{" "}
+                        {fmtMoney(
+                          Number(p.amount || 0) +
+                            Number(p.tax || 0) +
+                            Number(p.service || 0)
+                        )}
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
 
+              {/* Payments Table */}
+              {validPayments.length > 0 && (
+                <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 12 }} border="1" cellPadding="6">
+                  <thead>
+                    <tr style={{ background: "#f9f9f9" }}>
+                      <th>Payment Method</th>
+                      <th>Reference</th>
+                      <th style={{ textAlign: "right" }}>Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {validPayments.map((p, idx) => (
+                      <tr key={p.id || idx}>
+                        <td>{mapMethodToType(p.method)}</td>
+                        <td>{p.refNo || "-"}</td>
+                        <td style={{ textAlign: "right" }}>
+                          {currency} {fmtMoney(Number(p.amount || 0))}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+
               {/* Totals */}
               <div style={{ textAlign: "right", marginBottom: 24 }}>
-                <div>Total Charges: {currency} {fmtMoney(computedChargesTotal)}</div>
-                <div>Payments: {currency} {fmtMoney(computedPaymentsTotal)}</div>
-                <div>Deposit: {currency} {fmtMoney(computedDepositTotal)}</div>
+                <div>
+                  Total Charges: {currency} {fmtMoney(computedChargesTotal)}
+                </div>
+                <div>
+                  Total Payments: {currency} {fmtMoney(computedPaymentsTotal)}
+                </div>
+                <div>
+                  Total Deposit: {currency} {fmtMoney(computedDepositTotal)}
+                </div>
                 <div style={{ fontWeight: 700, marginTop: 8 }}>
                   Balance: {currency} {fmtMoney(computedBalance)}
                 </div>
+
+                {/* Payment breakdown by type */}
+                {templateConfig.showPaymentBreakdown && (
+                  <div style={{ marginTop: 12, textAlign: "left" }}>
+                    <h4>Payment Breakdown</h4>
+                    <table style={{ width: "100%", borderCollapse: "collapse" }} border="1" cellPadding="6">
+                      <tbody>
+                        {Object.keys(paymentsByType).map((type) => (
+                          <tr key={type}>
+                            <td>{type}</td>
+                            <td style={{ textAlign: "right" }}>
+                              {currency} {fmtMoney(paymentsByType[type] || 0)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
 
-              {/* Signatures */}
-              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 40 }}>
-                <div style={{ textAlign: "center", width: "40%" }}>
-                  <div>____________________</div>
-                  <div>Tanda Tangan Tamu</div>
+              {/* FOOTER */}
+              {templateConfig.footer && (
+                <div style={{ textAlign: "center", marginTop: 40, fontStyle: "italic" }}>
+                  {templateConfig.footer}
                 </div>
-                <div style={{ textAlign: "center", width: "40%" }}>
-                  <div>____________________</div>
-                  <div>Petugas ({reservation?.createdBy || "Hotel Staff"})</div>
-                </div>
-              </div>
+              )}
             </div>
           )}
         </div>

@@ -23,6 +23,8 @@ import FrontDeskCheckIn from "./pages/FrontDeskCheckIn";
 import FrontDeskInHouse from "./pages/FrontDeskInHouse";
 import GuestDetail from "./pages/GuestDetail";
 import NightAudit from "./pages/NightAudit";
+import AdminSettingsGeneral from "./admin/AdminSettingsGeneral";
+import AdminPrintTemplate from "./admin/AdminPrintTemplate";
 
 
 // New pages
@@ -248,6 +250,8 @@ export default function App() {
             </AppLayout>
           }
         />
+        <Route path="/admin/settings/general" element={<AdminSettingsGeneral permissions={userPermissions} permLoading={permLoading} />} />
+        <Route path="/admin/settings/print-template" element={<AdminPrintTemplate permissions={userPermissions} />} />
         <Route
           path="/cleanup"
           element={

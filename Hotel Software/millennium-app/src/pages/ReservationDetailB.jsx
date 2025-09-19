@@ -1,5 +1,8 @@
 // src/pages/ReservationDetailB.jsx
 import React from "react";
+import { addDoc, collection, serverTimestamp, doc, query, orderBy, onSnapshot } from "firebase/firestore";
+import { db } from "../firebase";
+
 
 export default function ReservationDetailB(props) {
   const {
@@ -39,8 +42,50 @@ export default function ReservationDetailB(props) {
     handleDeleteReservation,
     isAdmin,
     navigate,
-    fmt
-  } = props;
+    fmt,
+    currentUser, // pass from parent auth context if available
+    children,    // allow rendering ReservationDetailC inside
+   } = props;
+
+   const [logs, setLogs] = useState([]);
+
+   // Logging helper
+  async function logReservationChange({ action, data = null }) {
+    if (!reservation?.id) return;
+
+    const entry = {
+      reservationId: reservation.id,
+      action,
+      data,
+      actorUid: currentUser?.uid || null,
+      actorEmail: currentUser?.email || "unknown",
+      actorDisplay: currentUser?.displayName || null,
+      createdAt: serverTimestamp(),
+    };
+
+    try {
+      // Scoped log under this reservation
+      await addDoc(collection(doc(db, "reservations", reservation.id), "logs"), entry);
+
+      // (Optional) also keep global log collection
+      await addDoc(collection(db, "reservationLogs"), entry);
+    } catch (err) {
+      console.error("Failed to write reservation log", err);
+    }
+  }
+
+  // Subscribe to logs for this reservation
+  useEffect(() => {
+    if (!reservation?.id) return;
+    const q = query(
+      collection(doc(db, "reservations", reservation.id), "logs"),
+      orderBy("createdAt", "desc")
+    );
+    const unsub = onSnapshot(q, (snap) => {
+      setLogs(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+    });
+    return () => unsub();
+  }, [reservation?.id]);
 
   // Defensive: don't attempt to render if reservation isn't available yet
   if (!reservation) {
@@ -308,6 +353,37 @@ export default function ReservationDetailB(props) {
           )}
         </>
       )}
+      {/* ✅ Inject children such as ReservationDetailC with logging support */}
+      {children &&
+        React.cloneElement(children, {
+          reservation,
+          guest,
+          settings,
+          rooms,
+          logReservationChange,  // pass logger down
+        })}
+
+        {/* ✅ Logs Timeline */}
+      <div className="reservation-form" style={{ marginTop: 24 }}>
+        <h4>Change Log</h4>
+        {logs.length === 0 && <div style={{ fontStyle: "italic" }}>No changes logged yet.</div>}
+        <ul style={{ listStyle: "none", paddingLeft: 0 }}>
+          {logs.map((log) => (
+            <li key={log.id} style={{ marginBottom: 8, borderBottom: "1px solid #eee", paddingBottom: 6 }}>
+              <div>
+                <strong>{log.action}</strong>{" "}
+                {log.data && <code>{JSON.stringify(log.data)}</code>}
+              </div>
+              <div style={{ fontSize: "0.85em", color: "#555" }}>
+                By: {log.actorDisplay || log.actorEmail}{" "}
+                {log.createdAt?.toDate
+                  ? `at ${log.createdAt.toDate().toLocaleString()}`
+                  : ""}
+              </div>
+            </li>
+          ))}
+        </ul>
+      </div>
     </div>
   );
 }

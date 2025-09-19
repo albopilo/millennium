@@ -12,12 +12,13 @@ export default function AppLayout({
   const can = (perm) => permissions.includes(perm) || permissions.includes("*");
   const linkStyle = { color: "#cbd5e1", textDecoration: "none" };
 
-  // Collapsible Front Desk state
+  // Collapsible states
   const [frontDeskOpen, setFrontDeskOpen] = useState(true);
+  const [adminOpen, setAdminOpen] = useState(true);
 
-  // Fine-grained permissions per link
-  const canReservations = can("canViewReservations"); // Reservations, Calendar, Check In, In-House
-  const canHousekeeping = can("canViewHousekeeping"); // Housekeeping
+  // Fine-grained permissions
+  const canReservations = can("canViewReservations");
+  const canHousekeeping = can("canViewHousekeeping");
 
   // Show Front Desk group if user can see any of its items
   const showFrontDesk = canReservations || canHousekeeping;
@@ -118,9 +119,38 @@ export default function AppLayout({
               <Link to="/room-blocks" style={linkStyle}>
                 Room Blocks
               </Link>
-              <Link to="/admin" style={linkStyle}>
+
+              {/* Collapsible Admin Settings group */}
+              <div
+                onClick={() => setAdminOpen(!adminOpen)}
+                style={{
+                  ...linkStyle,
+                  cursor: "pointer",
+                  fontWeight: 600,
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  marginTop: 8
+                }}
+                title={adminOpen ? "Collapse" : "Expand"}
+              >
                 Admin Settings
-              </Link>
+                <span style={{ fontSize: "0.8em" }}>
+                  {adminOpen ? "▲" : "▼"}
+                </span>
+              </div>
+
+              {adminOpen && (
+                <div style={{ display: "grid", gap: 6, paddingLeft: 12 }}>
+                  <Link to="/admin/settings/general" style={linkStyle}>
+                    General Settings
+                  </Link>
+                  <Link to="/admin/settings/print-template" style={linkStyle}>
+                    Print Templates
+                  </Link>
+                </div>
+              )}
+
               <Link to="/cleanup" style={linkStyle}>
                 Cleanup Guests
               </Link>

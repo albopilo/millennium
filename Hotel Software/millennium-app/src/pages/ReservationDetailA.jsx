@@ -24,6 +24,10 @@ export default function ReservationDetail({ permissions = [], currentUser = null
   const navigate = useNavigate();
   const { id } = useParams();
 
+  // Compute once so children don’t need to guess
+  const resStatus = (reservation?.status || "").toLowerCase();
+  const canOperateNow = canOperate && resStatus !== "checked-out";
+
   // Permissions
   const can = (p) => permissions.includes(p) || permissions.includes("*");
   const canUpgrade = can("canUpgradeRoom") || can("canOverrideRoomType");
@@ -1372,87 +1376,130 @@ const printCheckInForm = () => {
   // Pass everything needed to presentational children
   return (
     <div>
-      <ReservationDetailB
-        reservation={reservation}
-        guest={guest}
-        settings={settings}
-        rooms={rooms}
-        assignRooms={assignRooms}
-        renderAssignmentRow={renderAssignmentRow}
-        setAssignRooms={setAssignRooms}
-        canOperate={canOperate}
-        canUpgrade={canUpgrade}
-        doCheckIn={doCheckIn}
-        printCheckInForm={printCheckInForm}
-        upgradeIndex={upgradeIndex}
-        setUpgradeIndex={setUpgradeIndex}
-        preUpgradeOptions={preUpgradeOptions}
-        upgradePreRoom={upgradePreRoom}
-        setUpgradePreRoom={setUpgradePreRoom}
-        doUpgradePreCheckIn={doUpgradePreCheckIn}
-        stays={stays}
-        setMoveRoomStay={setMoveRoomStay}
-        setUpgradeStay={setUpgradeStay}
-        canOverrideBilling={canOverrideBilling}
-        doCheckOut={doCheckOut}
-        printCheckOutBill={printCheckOutBill}
-        moveRoomStay={moveRoomStay}
-        newRoom={newRoom}
-        setNewRoom={setNewRoom}
-        sameTypeOptions={sameTypeOptions}
-        doChangeRoom={doChangeRoom}
-        upgradeStay={upgradeStay}
-        upgradeRoom={upgradeRoom}
-        setUpgradeRoom={setUpgradeRoom}
-        upgradeOptions={upgradeOptions}
-        doUpgradeRoom={doUpgradeRoom}
-        handleDeleteReservation={handleDeleteReservation}
-        isAdmin={isAdmin}
-        navigate={navigate}
-        fmt={fmt}
-      />
-
-      <ReservationDetailC
-        printRef={printRef}
-        printMode={printMode}
-        reservation={reservation}
-        settings={settings}
-        fmtDMY={fmtDMY}
-        calcNights={calcNights}
-        adultsChildren={adultsChildren}
-        assignRooms={assignRooms}
-        rooms={rooms}
-        postings={postings}
-        visiblePostings={visiblePostings}
-        displayChargeLines={displayChargeLines}
-        displayChargesTotal={displayChargesTotal}
-        displayPaymentsTotal={displayPaymentsTotal}
-        displayBalance={displayBalance}
-        payments={payments}
-        canOperate={canOperate}
-        isAdmin={isAdmin}
-        // pass add-charge/payment props if you used them in parent:
-        showAddCharge={showAddCharge}
-        setShowAddCharge={setShowAddCharge}
-        chargeForm={chargeForm}
-        setChargeForm={setChargeForm}
-        submitCharge={submitCharge}
-        showAddPayment={showAddPayment}
-        setShowAddPayment={setShowAddPayment}
-        paymentForm={paymentForm}
-        setPaymentForm={setPaymentForm}
-        submitPayment={submitPayment}
-        // delete modal props:
-        showDeleteModal={showDeleteModal}
-        deleteReason={deleteReason}
-        setDeleteReason={setDeleteReason}
-        deleting={deleting}
-        closeDeleteModal={closeDeleteModal}
-        deleteReservation={deleteReservation}
-        confirmDeleteReservation={confirmDeleteReservation}
-        guest={guest}
-        fmt={fmt}
-      />
+      {/* If printing, only render ReservationDetailC (scoped to .printable) */}
+      {printMode ? (
+        <ReservationDetailC
+         printRef={printRef}
+         printMode={printMode}
+         reservation={reservation}
+         settings={settings}
+         fmtDMY={fmtDMY}
+         calcNights={calcNights}
+          adultsChildren={adultsChildren}
+          assignRooms={assignRooms}
+          rooms={rooms}
+          postings={postings}
+          visiblePostings={visiblePostings}
+          displayChargeLines={displayChargeLines}
+          displayChargesTotal={displayChargesTotal}
+          displayPaymentsTotal={displayPaymentsTotal}
+          displayBalance={displayBalance}
+          payments={payments}
+          canOperate={canOperateNow}
+          isAdmin={isAdmin}
+          showAddCharge={showAddCharge}
+          setShowAddCharge={setShowAddCharge}
+          chargeForm={chargeForm}
+          setChargeForm={setChargeForm}
+          submitCharge={submitCharge}
+          showAddPayment={showAddPayment}
+          setShowAddPayment={setShowAddPayment}
+          paymentForm={paymentForm}
+          setPaymentForm={setPaymentForm}
+          submitPayment={submitPayment}
+          showDeleteModal={showDeleteModal}
+          deleteReason={deleteReason}
+          setDeleteReason={setDeleteReason}
+         deleting={deleting}
+          closeDeleteModal={closeDeleteModal}
+          deleteReservation={deleteReservation}
+          confirmDeleteReservation={confirmDeleteReservation}
+          guest={guest}
+          fmt={fmt}
+       />
+      ) : (
+        <>
+          <ReservationDetailB
+            reservation={reservation}
+           guest={guest}
+            settings={settings}
+            rooms={rooms}
+            assignRooms={assignRooms}
+            renderAssignmentRow={renderAssignmentRow}
+            setAssignRooms={setAssignRooms}
+            canOperate={canOperateNow}
+            canUpgrade={canUpgrade}
+            doCheckIn={doCheckIn}
+            printCheckInForm={printCheckInForm}
+            upgradeIndex={upgradeIndex}
+            setUpgradeIndex={setUpgradeIndex}
+            preUpgradeOptions={preUpgradeOptions}
+            upgradePreRoom={upgradePreRoom}
+            setUpgradePreRoom={setUpgradePreRoom}
+            doUpgradePreCheckIn={doUpgradePreCheckIn}
+            stays={stays}
+            setMoveRoomStay={setMoveRoomStay}
+            setUpgradeStay={setUpgradeStay}
+            canOverrideBilling={canOverrideBilling}
+            doCheckOut={doCheckOut}
+            printCheckOutBill={printCheckOutBill}
+            moveRoomStay={moveRoomStay}
+            newRoom={newRoom}
+            setNewRoom={setNewRoom}
+            sameTypeOptions={sameTypeOptions}
+            doChangeRoom={doChangeRoom}
+            upgradeStay={upgradeStay}
+            upgradeRoom={upgradeRoom}
+           setUpgradeRoom={setUpgradeRoom}
+            upgradeOptions={upgradeOptions}
+            doUpgradeRoom={doUpgradeRoom}
+            handleDeleteReservation={handleDeleteReservation}
+            isAdmin={isAdmin}
+            navigate={navigate}
+            fmt={fmt}
+          />
+          {/* Render folio + action section too (non-print mode) */}
+          <ReservationDetailC
+            printRef={printRef}
+            printMode={null}
+            reservation={reservation}
+            settings={settings}
+            fmtDMY={fmtDMY}
+            calcNights={calcNights}
+            adultsChildren={adultsChildren}
+            assignRooms={assignRooms}
+            rooms={rooms}
+            postings={postings}
+            visiblePostings={visiblePostings}
+            displayChargeLines={displayChargeLines}
+            displayChargesTotal={displayChargesTotal}
+            displayPaymentsTotal={displayPaymentsTotal}
+            displayBalance={displayBalance}
+            payments={payments}
+            canOperate={canOperateNow}
+            isAdmin={isAdmin}
+            showAddCharge={showAddCharge}
+            setShowAddCharge={setShowAddCharge}
+            chargeForm={chargeForm}
+            setChargeForm={setChargeForm}
+           submitCharge={submitCharge}
+            showAddPayment={showAddPayment}
+            setShowAddPayment={setShowAddPayment}
+            paymentForm={paymentForm}
+            setPaymentForm={setPaymentForm}
+            submitPayment={submitPayment}
+            showDeleteModal={showDeleteModal}
+            deleteReason={deleteReason}
+            setDeleteReason={setDeleteReason}
+            deleting={deleting}
+            closeDeleteModal={closeDeleteModal}
+            deleteReservation={deleteReservation}
+            confirmDeleteReservation={confirmDeleteReservation}
+            guest={guest}
+            fmt={fmt}
+          />
+        </>
+      )}
     </div>
   );
 }
