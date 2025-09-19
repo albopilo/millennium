@@ -2,7 +2,6 @@
 import { useEffect, useState } from "react";
 import { doc, getDoc, setDoc } from "firebase/firestore";
 import { db } from "../firebase";
-import AppLayout from "../AppLayout";
 
 export default function AdminPrintTemplate({ permissions }) {
   const [templateConfig, setTemplateConfig] = useState({
@@ -46,12 +45,11 @@ export default function AdminPrintTemplate({ permissions }) {
     }
   };
 
-  if (!canManage) return <AppLayout title="Admin Print Template">Access denied</AppLayout>;
-  if (loading) return <AppLayout title="Admin Print Template">Loading…</AppLayout>;
+  if (!canManage) return <>Access denied</>;
+  if (loading) return <>Loading…</>;
 
   return (
-    <AppLayout title="Admin Print Template">
-      <div className="container">
+    <div className="container">
         <h2>Print Template Settings</h2>
 
         <section className="card">
@@ -138,6 +136,5 @@ export default function AdminPrintTemplate({ permissions }) {
           {saving ? "Saving…" : "Save Template"}
         </button>
       </div>
-    </AppLayout>
   );
 }
