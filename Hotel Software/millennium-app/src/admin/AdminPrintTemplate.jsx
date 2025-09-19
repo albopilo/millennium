@@ -1,8 +1,8 @@
 // src/pages/admin/adminprinttemplate.jsx
 import { useEffect, useState } from "react";
 import { doc, getDoc, setDoc } from "firebase/firestore";
-import { db } from "../../firebase";
-import AppLayout from "../../AppLayout";
+import { db } from "../firebase";
+import AppLayout from "../AppLayout";
 
 export default function AdminPrintTemplate({ permissions }) {
   const [templateConfig, setTemplateConfig] = useState({
