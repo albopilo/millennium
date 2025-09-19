@@ -24,15 +24,17 @@ export default function ReservationDetail({ permissions = [], currentUser = null
   const navigate = useNavigate();
   const { id } = useParams();
 
-  // Compute once so children don’t need to guess
-  const resStatus = (reservation?.status || "").toLowerCase();
-  const canOperateNow = canOperate && resStatus !== "checked-out";
-
-  // Permissions
+    // Permissions
   const can = (p) => permissions.includes(p) || permissions.includes("*");
   const canUpgrade = can("canUpgradeRoom") || can("canOverrideRoomType");
   const canOperate = can("canOperateFrontDesk") || can("canEditReservations");
   const canOverrideBilling = can("canOverrideBilling");
+
+
+  // Compute once so children don’t need to guess
+  const resStatus = (reservation?.status || "").toLowerCase();
+  const canOperateNow = canOperate && resStatus !== "checked-out";
+
 
   // Actor and admin
   const actorName =

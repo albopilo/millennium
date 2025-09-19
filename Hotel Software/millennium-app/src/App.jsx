@@ -250,8 +250,37 @@ export default function App() {
             </AppLayout>
           }
         />
-        <Route path="/admin/settings/general" element={<AdminSettingsGeneral permissions={permissions} permLoading={false} />} />
-        <Route path="/admin/settings/print-template" element={<AdminPrintTemplate permissions={permissions} />} />
+        <Route
+  path="/admin/settings/general"
+  element={
+    <AppLayout
+      title="General Settings"
+      permissions={permissions}
+      currentUser={currentUser}
+      userData={userData}
+    >
+      <AdminSettingsGeneral
+        permissions={permissions}
+        permLoading={false}
+      />
+    </AppLayout>
+  }
+/>
+
+        <Route
+  path="/admin/settings/print-template"
+  element={
+    <AppLayout
+      title="Print Templates"
+      permissions={permissions}
+      currentUser={currentUser}
+      userData={userData}
+    >
+      <AdminPrintTemplate permissions={permissions} />
+    </AppLayout>
+  }
+/>
+
         <Route
           path="/cleanup"
           element={
