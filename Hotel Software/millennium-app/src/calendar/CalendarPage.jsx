@@ -5,7 +5,7 @@ import moment from "moment";
 import { collection, getDocs } from "firebase/firestore";
 import { db } from "../firebase";
 import { useNavigate } from "react-router-dom";
-import "react-calendar-timeline/lib/Timeline.css";
+import "react-calendar-timeline/dist/style.css";
 
 export default function CalendarPage({ permissions }) {
   const [groups, setGroups] = useState([]); // Rooms
