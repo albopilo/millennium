@@ -12,8 +12,8 @@ import { useNavigate } from "react-router-dom";
 import "react-calendar-timeline/dist/style.css";
 
 export default function CalendarPage({ permissions }) {
-  const [groups, setGroups] = useState([]); // Rooms
-  const [items, setItems] = useState([]); // Reservations
+  const [groups, setGroups] = useState([]); // Rooms (groups for timeline)
+  const [items, setItems] = useState([]); // Reservations (items for timeline)
   const [visibleTimeStart, setVisibleTimeStart] = useState(
     moment().startOf("week").valueOf()
   );
@@ -24,46 +24,65 @@ export default function CalendarPage({ permissions }) {
   const navigate = useNavigate();
 
   const fetchData = async () => {
-    // Load rooms
-    const roomSnap = await getDocs(collection(db, "rooms"));
-    const rooms = roomSnap.docs.map((d) => {
-      const r = d.data();
-      return {
-        id: String(r.roomNumber),
-        title: `${r.roomNumber} (${r.roomType})`,
-      };
-    });
-    const groupIds = new Set(rooms.map((g) => g.id));
+    try {
+      // Load rooms and keep roomType for sorting
+      const roomSnap = await getDocs(collection(db, "rooms"));
+      const roomsRaw = roomSnap.docs.map((d) => {
+        const r = d.data() || {};
+        return {
+          id: String(r.roomNumber),
+          roomNumber: r.roomNumber,
+          roomType: (r.roomType || "").toString(),
+          title: `${r.roomNumber} (${r.roomType || ""})`,
+        };
+      });
 
-    // Load reservations
-    const resSnap = await getDocs(collection(db, "reservations"));
-    const dataItems = resSnap.docs.flatMap((d) => {
-      const r = d.data();
-      if (!r.checkInDate || !r.checkOutDate) return [];
-      if (r.status === "cancelled" || r.status === "deleted") return [];
+      // Sort by roomType (asc, case-insensitive) then by numeric roomNumber if possible
+      roomsRaw.sort((a, b) => {
+        const ta = (a.roomType || "").toLowerCase();
+        const tb = (b.roomType || "").toLowerCase();
+        if (ta < tb) return -1;
+        if (ta > tb) return 1;
 
-      const toMoment = (v) => (v?.toDate ? moment(v.toDate()) : moment(v));
+        // try numeric compare on roomNumber; fallback to localeCompare
+        const na = Number(String(a.roomNumber).replace(/[^\d-]/g, ""));
+        const nb = Number(String(b.roomNumber).replace(/[^\d-]/g, ""));
+        if (!Number.isNaN(na) && !Number.isNaN(nb)) {
+          return na - nb;
+        }
+        return String(a.id).localeCompare(String(b.id), undefined, { numeric: true });
+      });
 
-      let start = toMoment(r.checkInDate).startOf("day");
-      let end = toMoment(r.checkOutDate).startOf("day");
+      const groupsPrepared = roomsRaw.map((r) => ({ id: r.id, title: r.title }));
+      const groupIds = new Set(groupsPrepared.map((g) => g.id));
 
-      if (!end.isAfter(start)) {
-        end = start.clone().add(1, "day");
-      }
+      // Load reservations
+      const resSnap = await getDocs(collection(db, "reservations"));
+      const dataItems = resSnap.docs.flatMap((d) => {
+        const r = d.data();
+        if (!r || !r.checkInDate || !r.checkOutDate) return [];
+        const status = (r.status || "").toLowerCase();
+        if (status === "cancelled" || status === "deleted") return [];
 
-      let bg = "#3788d8";
-      if (r.status === "checked-in") bg = "green";
-      else if (r.status === "booked") bg = "blue";
-      else if (r.status === "checked-out") bg = "gray";
+        const toMoment = (v) => (v?.toDate ? moment(v.toDate()) : moment(v));
 
-      return (r.roomNumbers || []).flatMap((roomNumber) => {
-        const groupId = String(roomNumber);
-        if (!groupIds.has(groupId)) return [];
+        let start = toMoment(r.checkInDate).startOf("day");
+        let end = toMoment(r.checkOutDate).startOf("day");
+        if (!end.isAfter(start)) {
+          end = start.clone().add(1, "day");
+        }
 
-        const itemId = `${d.id}-${roomNumber}`;
+        let bg = "#3788d8";
+        if (status === "checked-in") bg = "green";
+        else if (status === "booked") bg = "blue";
+        else if (status === "checked-out") bg = "gray";
 
-        return [
-          {
+        return (r.roomNumbers || []).flatMap((roomNumber) => {
+          const groupId = String(roomNumber);
+          if (!groupIds.has(groupId)) return [];
+
+          const itemId = `${d.id}-${roomNumber}`;
+          return {
             id: itemId,
             group: groupId,
             title: `${r.guestName || "Unknown"} (${r.status || ""})`,
@@ -77,23 +96,27 @@ export default function CalendarPage({ permissions }) {
                 overflow: "hidden",
                 textOverflow: "ellipsis",
                 whiteSpace: "nowrap",
-              },
-              onClick: () => {
-                const [resId] = itemId.split("-");
-                if (resId) navigate(`/reservations/${resId}`);
+                fontSize: 12,
+                paddingLeft: 6,
+                paddingRight: 6,
               },
             },
-          },
-        ];
+          };
+        });
       });
-    });
 
-    setGroups(rooms);
-    setItems(dataItems);
+      setGroups(groupsPrepared);
+      setItems(dataItems);
+    } catch (err) {
+      console.error("CalendarPage.fetchData error:", err);
+      setGroups([]);
+      setItems([]);
+    }
   };
 
   useEffect(() => {
     fetchData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Today highlight
@@ -121,14 +144,6 @@ export default function CalendarPage({ permissions }) {
     setVisibleTimeEnd(newEnd);
   };
 
-  useEffect(() => {
-  // Always reset to current week when page is mounted
-  const newStart = moment().startOf("week").valueOf();
-  const newEnd = moment().startOf("week").add(7, "days").valueOf();
-  setVisibleTimeStart(newStart);
-  setVisibleTimeEnd(newEnd);
-}, []); 
-
   return (
     <div style={{ padding: 8 }}>
       {/* Navigation buttons */}
@@ -151,12 +166,18 @@ export default function CalendarPage({ permissions }) {
           setVisibleTimeStart(start);
           setVisibleTimeEnd(end);
         }}
+        // make items clickable (central handler)
+        onItemClick={(itemId, e, time) => {
+          const [resId] = String(itemId).split("-");
+          if (resId) navigate(`/reservations/${resId}`);
+        }}
         canMove={false}
         canResize={false}
         stackItems
+        // Compact rows
         itemHeightRatio={0.75}
-        lineHeight={60}
-        sidebarWidth={150}
+        lineHeight={40}
+        sidebarWidth={180}
         minZoom={7 * 24 * 60 * 60 * 1000} // 7 days
         maxZoom={7 * 24 * 60 * 60 * 1000} // 7 days
         dragSnap={24 * 60 * 60 * 1000}

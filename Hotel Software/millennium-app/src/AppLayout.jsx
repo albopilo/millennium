@@ -1,43 +1,116 @@
+// src/AppLayout.jsx
 import { Link } from "react-router-dom";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import LogoutButton from "./components/LogoutButton";
+
+// Lucide icons
+import {
+  Users,
+  User,
+  CalendarDays,
+  ClipboardList,
+  Home,
+  BedDouble,
+  Brush,
+  Wrench,
+  FileText,
+  Blocks,
+  Settings,
+  Cog,
+  Trash2,
+  Layers,
+} from "lucide-react";
 
 export default function AppLayout({
   title,
   children,
   permissions = [],
   currentUser,
-  userData
+  userData,
 }) {
   const can = (perm) => permissions.includes(perm) || permissions.includes("*");
-  const linkStyle = { color: "#cbd5e1", textDecoration: "none" };
+  const linkStyle = {
+    color: "#cbd5e1",
+    textDecoration: "none",
+    whiteSpace: "nowrap",
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+  };
 
   // Collapsible states
   const [frontDeskOpen, setFrontDeskOpen] = useState(true);
   const [adminOpen, setAdminOpen] = useState(true);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
-  // Fine-grained permissions
+  // Load collapse state from localStorage
+  useEffect(() => {
+    const stored = localStorage.getItem("sidebarCollapsed");
+    if (stored !== null) {
+      setSidebarCollapsed(stored === "true");
+    }
+  }, []);
+
+  // Save collapse state to localStorage
+  useEffect(() => {
+    localStorage.setItem("sidebarCollapsed", String(sidebarCollapsed));
+  }, [sidebarCollapsed]);
+
   const canReservations = can("canViewReservations");
   const canHousekeeping = can("canViewHousekeeping");
-
-  // Show Front Desk group if user can see any of its items
   const showFrontDesk = canReservations || canHousekeeping;
 
   return (
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "240px 1fr",
-        minHeight: "100vh"
+        gridTemplateColumns: sidebarCollapsed ? "60px 1fr" : "240px 1fr",
+        minHeight: "100vh",
       }}
     >
-      <aside style={{ background: "#0f172a", color: "#fff", padding: "16px" }}>
-        <div style={{ fontWeight: 700, marginBottom: 16 }}>Millennium Admin</div>
+      {/* Sidebar */}
+      <aside
+        style={{
+          background: "#0f172a",
+          color: "#fff",
+          padding: "16px 8px",
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
+        {/* Top bar: title + collapse button */}
+        <div
+          style={{
+            fontWeight: 700,
+            marginBottom: 16,
+            display: "flex",
+            justifyContent: sidebarCollapsed ? "center" : "space-between",
+            alignItems: "center",
+          }}
+        >
+          {!sidebarCollapsed && "Millennium Admin"}
+          <button
+            onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+            style={{
+              background: "transparent",
+              border: "none",
+              color: "#cbd5e1",
+              cursor: "pointer",
+              fontSize: "1rem",
+              marginLeft: sidebarCollapsed ? 0 : 8,
+            }}
+            title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          >
+            <Layers size={18} />
+          </button>
+        </div>
 
-        <nav style={{ display: "grid", gap: 8 }}>
+        {/* Navigation */}
+        <nav style={{ display: "grid", gap: 8, flex: 1 }}>
           {can("canManageGuests") && (
             <Link to="/guests" style={linkStyle}>
-              Guests
+              <User size={18} />
+              {!sidebarCollapsed && "Guests"}
             </Link>
           )}
 
@@ -49,39 +122,46 @@ export default function AppLayout({
                   ...linkStyle,
                   cursor: "pointer",
                   fontWeight: 600,
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  marginTop: 8
+                  justifyContent: sidebarCollapsed ? "center" : "space-between",
                 }}
-                title={frontDeskOpen ? "Collapse" : "Expand"}
+                title="Front Desk"
               >
-                Front Desk
-                <span style={{ fontSize: "0.8em" }}>
-                  {frontDeskOpen ? "▲" : "▼"}
-                </span>
+                <Home size={18} />
+                {!sidebarCollapsed && (
+                  <>
+                    <span>Front Desk</span>
+                    <span style={{ fontSize: "0.8em" }}>
+                      {frontDeskOpen ? "▲" : "▼"}
+                    </span>
+                  </>
+                )}
               </div>
 
-              {frontDeskOpen && (
-                <div style={{ display: "grid", gap: 6, paddingLeft: 12 }}>
+              {!sidebarCollapsed && frontDeskOpen && (
+                <div style={{ display: "grid", gap: 6, paddingLeft: 24 }}>
                   {canReservations && (
                     <>
                       <Link to="/reservations" style={linkStyle}>
+                        <ClipboardList size={18} />
                         Add Reservation
                       </Link>
                       <Link to="/calendar" style={linkStyle}>
+                        <CalendarDays size={18} />
                         Calendar
                       </Link>
                       <Link to="/frontdesk-checkin" style={linkStyle}>
+                        <BedDouble size={18} />
                         Check In
                       </Link>
                       <Link to="/frontdesk-inhouse" style={linkStyle}>
+                        <BedDouble size={18} />
                         In-House
                       </Link>
                     </>
                   )}
                   {canHousekeeping && (
                     <Link to="/housekeeping" style={linkStyle}>
+                      <Brush size={18} />
                       Housekeeping
                     </Link>
                   )}
@@ -92,32 +172,37 @@ export default function AppLayout({
 
           {can("canCreateReservations") && (
             <Link to="/group-booking" style={linkStyle}>
-              Group Booking
+              <Users size={18} />
+              {!sidebarCollapsed && "Group Booking"}
             </Link>
           )}
 
           {can("canManageEvents") && (
             <Link to="/events" style={linkStyle}>
-              Events
+              <CalendarDays size={18} />
+              {!sidebarCollapsed && "Events"}
             </Link>
           )}
 
           {can("canViewMaintenance") && (
             <Link to="/maintenance" style={linkStyle}>
-              Maintenance
+              <Wrench size={18} />
+              {!sidebarCollapsed && "Maintenance"}
             </Link>
           )}
 
           {can("canViewBilling") && (
             <Link to="/reports" style={linkStyle}>
-              Reports
+              <FileText size={18} />
+              {!sidebarCollapsed && "Reports"}
             </Link>
           )}
 
           {can("*") && (
             <>
               <Link to="/room-blocks" style={linkStyle}>
-                Room Blocks
+                <Blocks size={18} />
+                {!sidebarCollapsed && "Room Blocks"}
               </Link>
 
               {/* Collapsible Admin Settings group */}
@@ -127,64 +212,70 @@ export default function AppLayout({
                   ...linkStyle,
                   cursor: "pointer",
                   fontWeight: 600,
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  marginTop: 8
+                  justifyContent: sidebarCollapsed ? "center" : "space-between",
                 }}
-                title={adminOpen ? "Collapse" : "Expand"}
+                title="Admin Settings"
               >
-                Admin Settings
-                <span style={{ fontSize: "0.8em" }}>
-                  {adminOpen ? "▲" : "▼"}
-                </span>
+                <Settings size={18} />
+                {!sidebarCollapsed && (
+                  <>
+                    <span>Admin Settings</span>
+                    <span style={{ fontSize: "0.8em" }}>
+                      {adminOpen ? "▲" : "▼"}
+                    </span>
+                  </>
+                )}
               </div>
 
-              {adminOpen && (
-                <div style={{ display: "grid", gap: 6, paddingLeft: 12 }}>
+              {!sidebarCollapsed && adminOpen && (
+                <div style={{ display: "grid", gap: 6, paddingLeft: 24 }}>
                   <Link to="/admin/settings/general" style={linkStyle}>
+                    <Cog size={18} />
                     General Settings
                   </Link>
                   <Link to="/admin/settings/print-template" style={linkStyle}>
+                    <FileText size={18} />
                     Print Templates
                   </Link>
                 </div>
               )}
 
               <Link to="/cleanup" style={linkStyle}>
-                Cleanup Guests
+                <Trash2 size={18} />
+                {!sidebarCollapsed && "Cleanup Guests"}
               </Link>
             </>
           )}
-
-          {/* Logout and user info */}
-          <div style={{ marginTop: "10px" }}>
-            <LogoutButton />
-            {currentUser && userData && (
-              <div
-                style={{
-                  marginTop: "8px",
-                  fontSize: "0.85rem",
-                  color: "#94a3b8",
-                  lineHeight: 1.4
-                }}
-              >
-                <div>{userData.displayName || currentUser.email}</div>
-                <div style={{ fontStyle: "italic" }}>
-                  Role: {userData.roleId || "unknown"}
-                </div>
-              </div>
-            )}
-          </div>
         </nav>
+
+        {/* Logout and user info */}
+        <div style={{ marginTop: "10px" }}>
+          <LogoutButton />
+          {!sidebarCollapsed && currentUser && userData && (
+            <div
+              style={{
+                marginTop: "8px",
+                fontSize: "0.85rem",
+                color: "#94a3b8",
+                lineHeight: 1.4,
+              }}
+            >
+              <div>{userData.displayName || currentUser.email}</div>
+              <div style={{ fontStyle: "italic" }}>
+                Role: {userData.roleId || "unknown"}
+              </div>
+            </div>
+          )}
+        </div>
       </aside>
 
+      {/* Main content */}
       <main>
         <header
           style={{
             background: "#fff",
             borderBottom: "1px solid #eee",
-            padding: "12px 16px"
+            padding: "12px 16px",
           }}
         >
           <h1 style={{ margin: 0, fontSize: "1.25rem" }}>{title}</h1>
