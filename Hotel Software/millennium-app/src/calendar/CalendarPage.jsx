@@ -1,5 +1,5 @@
 // src/pages/CalendarPage.jsx
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import Timeline, {
   TimelineMarkers,
   TodayMarker,
@@ -12,20 +12,18 @@ import { useNavigate } from "react-router-dom";
 import "react-calendar-timeline/dist/style.css";
 
 export default function CalendarPage({ permissions }) {
-  const [groups, setGroups] = useState([]); // Rooms (groups for timeline)
-  const [items, setItems] = useState([]); // Reservations (items for timeline)
-  const [visibleTimeStart, setVisibleTimeStart] = useState(
-    moment().startOf("week").valueOf()
-  );
-  const [visibleTimeEnd, setVisibleTimeEnd] = useState(
-    moment().startOf("week").add(7, "days").valueOf()
-  );
+  const [groups, setGroups] = useState([]); // groups visible to the timeline
+  const [items, setItems] = useState([]); // items visible to the timeline
+  const [allGroupMeta, setAllGroupMeta] = useState([]); // full rooms meta with roomType preserved
+  const [collapsedTypes, setCollapsedTypes] = useState(() => new Set()); // room types collapsed
+  const [visibleTimeStart, setVisibleTimeStart] = useState(moment().startOf("week").valueOf());
+  const [visibleTimeEnd, setVisibleTimeEnd] = useState(moment().startOf("week").add(7, "days").valueOf());
 
   const navigate = useNavigate();
 
+  // fetch rooms + reservations
   const fetchData = async () => {
     try {
-      // Load rooms and keep roomType for sorting
       const roomSnap = await getDocs(collection(db, "rooms"));
       const roomsRaw = roomSnap.docs.map((d) => {
         const r = d.data() || {};
@@ -37,26 +35,21 @@ export default function CalendarPage({ permissions }) {
         };
       });
 
-      // Sort by roomType (asc, case-insensitive) then by numeric roomNumber if possible
+      // sort by roomType then number
       roomsRaw.sort((a, b) => {
         const ta = (a.roomType || "").toLowerCase();
         const tb = (b.roomType || "").toLowerCase();
         if (ta < tb) return -1;
         if (ta > tb) return 1;
-
-        // try numeric compare on roomNumber; fallback to localeCompare
         const na = Number(String(a.roomNumber).replace(/[^\d-]/g, ""));
         const nb = Number(String(b.roomNumber).replace(/[^\d-]/g, ""));
-        if (!Number.isNaN(na) && !Number.isNaN(nb)) {
-          return na - nb;
-        }
+        if (!Number.isNaN(na) && !Number.isNaN(nb)) return na - nb;
         return String(a.id).localeCompare(String(b.id), undefined, { numeric: true });
       });
 
-      const groupsPrepared = roomsRaw.map((r) => ({ id: r.id, title: r.title }));
-      const groupIds = new Set(groupsPrepared.map((g) => g.id));
+      setAllGroupMeta(roomsRaw);
 
-      // Load reservations
+      // prepare reservation items
       const resSnap = await getDocs(collection(db, "reservations"));
       const dataItems = resSnap.docs.flatMap((d) => {
         const r = d.data();
@@ -65,12 +58,10 @@ export default function CalendarPage({ permissions }) {
         if (status === "cancelled" || status === "deleted") return [];
 
         const toMoment = (v) => (v?.toDate ? moment(v.toDate()) : moment(v));
-
         let start = toMoment(r.checkInDate).startOf("day");
-        let end = toMoment(r.checkOutDate).startOf("day");
-        if (!end.isAfter(start)) {
-          end = start.clone().add(1, "day");
-        }
+        let end = toMoment(r.checkOutDate).startOf("day"); // checkOutDay is exclusive in hotel logic
+
+        if (!end.isAfter(start)) end = start.clone().add(1, "day");
 
         let bg = "#3788d8";
         if (status === "checked-in") bg = "green";
@@ -78,13 +69,11 @@ export default function CalendarPage({ permissions }) {
         else if (status === "checked-out") bg = "gray";
 
         return (r.roomNumbers || []).flatMap((roomNumber) => {
-          const groupId = String(roomNumber);
-          if (!groupIds.has(groupId)) return [];
-
+          const gid = String(roomNumber);
           const itemId = `${d.id}-${roomNumber}`;
           return {
             id: itemId,
-            group: groupId,
+            group: gid,
             title: `${r.guestName || "Unknown"} (${r.status || ""})`,
             start_time: start.valueOf(),
             end_time: end.valueOf(),
@@ -105,10 +94,10 @@ export default function CalendarPage({ permissions }) {
         });
       });
 
-      setGroups(groupsPrepared);
       setItems(dataItems);
     } catch (err) {
       console.error("CalendarPage.fetchData error:", err);
+      setAllGroupMeta([]);
       setGroups([]);
       setItems([]);
     }
@@ -119,42 +108,90 @@ export default function CalendarPage({ permissions }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // derive the visible groups from allGroupMeta & collapsedTypes
+  const derivedGroups = useMemo(() => {
+    if (!allGroupMeta || allGroupMeta.length === 0) return [];
+    return allGroupMeta
+      .filter((g) => !collapsedTypes.has((g.roomType || "").toString()))
+      .map((g) => ({ id: g.id, title: g.title }));
+  }, [allGroupMeta, collapsedTypes]);
+
+  useEffect(() => {
+    setGroups(derivedGroups);
+  }, [derivedGroups]);
+
+  // roomTypes list for toggles (unique in order)
+  const roomTypes = useMemo(() => {
+    const seen = new Set();
+    const list = [];
+    for (const r of allGroupMeta) {
+      const t = (r.roomType || "Unspecified").toString();
+      if (!seen.has(t)) {
+        seen.add(t);
+        list.push(t);
+      }
+    }
+    return list;
+  }, [allGroupMeta]);
+
+  const toggleType = (t) => {
+    setCollapsedTypes((prev) => {
+      const next = new Set(prev);
+      if (next.has(t)) next.delete(t);
+      else next.add(t);
+      return next;
+    });
+  };
+
   // Today highlight
   const todayStart = moment().startOf("day").valueOf();
 
-  // Navigation handlers
+  // Navigation
   const handlePrevWeek = () => {
-    const newStart = moment(visibleTimeStart).subtract(7, "days").valueOf();
-    const newEnd = moment(visibleTimeEnd).subtract(7, "days").valueOf();
-    setVisibleTimeStart(newStart);
-    setVisibleTimeEnd(newEnd);
+    setVisibleTimeStart(moment(visibleTimeStart).subtract(7, "days").valueOf());
+    setVisibleTimeEnd(moment(visibleTimeEnd).subtract(7, "days").valueOf());
   };
-
   const handleNextWeek = () => {
-    const newStart = moment(visibleTimeStart).add(7, "days").valueOf();
-    const newEnd = moment(visibleTimeEnd).add(7, "days").valueOf();
-    setVisibleTimeStart(newStart);
-    setVisibleTimeEnd(newEnd);
+    setVisibleTimeStart(moment(visibleTimeStart).add(7, "days").valueOf());
+    setVisibleTimeEnd(moment(visibleTimeEnd).add(7, "days").valueOf());
   };
-
   const handleToday = () => {
-    const newStart = moment().startOf("week").valueOf();
-    const newEnd = moment().startOf("week").add(7, "days").valueOf();
-    setVisibleTimeStart(newStart);
-    setVisibleTimeEnd(newEnd);
+    setVisibleTimeStart(moment().startOf("week").valueOf());
+    setVisibleTimeEnd(moment().startOf("week").add(7, "days").valueOf());
   };
 
   return (
     <div style={{ padding: 8 }}>
-      {/* Navigation buttons */}
-      <div style={{ marginBottom: 8 }}>
-        <button onClick={handlePrevWeek} style={{ marginRight: 8 }}>
-          ◀ Prev Week
-        </button>
-        <button onClick={handleToday} style={{ marginRight: 8 }}>
-          Today
-        </button>
-        <button onClick={handleNextWeek}>Next Week ▶</button>
+      <div style={{ display: "flex", alignItems: "center", marginBottom: 8, gap: 12 }}>
+        <div>
+          <button onClick={handlePrevWeek} style={{ marginRight: 8 }}>◀ Prev Week</button>
+          <button onClick={handleToday} style={{ marginRight: 8 }}>Today</button>
+          <button onClick={handleNextWeek}>Next Week ▶</button>
+        </div>
+
+        {/* Room type collapsibles */}
+        <div style={{ marginLeft: 16, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <strong style={{ color: "#333" }}>Room types:</strong>
+          {roomTypes.map((t) => {
+            const collapsed = collapsedTypes.has(t);
+            return (
+              <button
+                key={t}
+                onClick={() => toggleType(t)}
+                style={{
+                  padding: "4px 8px",
+                  borderRadius: 6,
+                  background: collapsed ? "#f3f4f6" : "#e6f0ff",
+                  border: "1px solid #ddd",
+                  cursor: "pointer",
+                }}
+                title={collapsed ? `Expand ${t}` : `Collapse ${t}`}
+              >
+                {t} {collapsed ? "▸" : "▾"}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       <Timeline
@@ -166,34 +203,24 @@ export default function CalendarPage({ permissions }) {
           setVisibleTimeStart(start);
           setVisibleTimeEnd(end);
         }}
-        // make items clickable (central handler)
-        onItemClick={(itemId, e, time) => {
+        onItemClick={(itemId) => {
           const [resId] = String(itemId).split("-");
           if (resId) navigate(`/reservations/${resId}`);
         }}
         canMove={false}
         canResize={false}
         stackItems
-        // Compact rows
         itemHeightRatio={0.75}
         lineHeight={40}
         sidebarWidth={180}
-        minZoom={7 * 24 * 60 * 60 * 1000} // 7 days
-        maxZoom={7 * 24 * 60 * 60 * 1000} // 7 days
+        minZoom={7 * 24 * 60 * 60 * 1000}
+        maxZoom={7 * 24 * 60 * 60 * 1000}
         dragSnap={24 * 60 * 60 * 1000}
         timeSteps={{ day: 1 }}
       >
         <TimelineMarkers>
           <TodayMarker>
-            {({ styles }) => (
-              <div
-                style={{
-                  ...styles,
-                  backgroundColor: "red",
-                  width: "2px",
-                }}
-              />
-            )}
+            {({ styles }) => <div style={{ ...styles, backgroundColor: "red", width: 2 }} />}
           </TodayMarker>
 
           <CustomMarker date={todayStart}>

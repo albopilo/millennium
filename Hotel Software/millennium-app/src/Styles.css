@@ -88,6 +88,10 @@ body {
 
 /* Form elements */
 input[type="text"],
+select {
+  width: 100%;
+  max-width: 100%;
+}
 input[type="number"],
 input[type="date"],
 select {
@@ -101,7 +105,9 @@ select {
 }
 
 input[type="number"] {
-  width: 80px;
+  min-width: 80px;    /* allow small controls, but not force */
+  width: auto;
+  padding: 4px 8px;
 }
 
 input:focus,
@@ -114,12 +120,17 @@ select:focus {
 button {
   height: 34px;
   padding: 0 12px;
-  border: 1px solid transparent;
   border-radius: var(--radius);
   background: var(--color-primary);
-  color: #ffffff;
+  color: #fff;
   font-weight: 600;
-  cursor: pointer;
+}
+
+
+button.icon-only {
+  height: 28px;
+  width: 28px;
+  padding: 0;
 }
 
 button:hover {
@@ -152,6 +163,11 @@ button:disabled {
   font-size: 14px;
   line-height: 1.5;
   overflow: hidden;
+}
+
+.reservation-form.folio input[type="number"],
+.folio-line input[type="number"] {
+  min-width: 120px;
 }
 
 .folio-header {

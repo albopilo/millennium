@@ -146,6 +146,69 @@ export default function ReservationDetailC(props) {
     )
     .reduce((sum, p) => sum + Number(p.amount || 0), 0);
 
+  // === Aggregate postings, room charges and other charges ===
+  const activePostings = Array.isArray(postings)
+    ? postings.filter((p) => (((p.status || "") + "").toLowerCase() !== "void"))
+    : [];
+
+  // Room postings (posted by accountCode 'ROOM')
+  const roomPostings = activePostings.filter(
+    (p) => (((p.accountCode || "") + "").toUpperCase() === "ROOM")
+  );
+
+  // Other charge postings (exclude ROOM, DEPOSIT, PAY)
+  const otherChargePostings = activePostings.filter((p) => {
+    const ac = ((p.accountCode || "") + "").toUpperCase();
+    return ac !== "ROOM" && ac !== "DEPOSIT" && ac !== "PAY";
+  });
+
+  // Map room postings to roomNumber => posted total (if posting includes roomNumber)
+  const postingsByRoom = {};
+  roomPostings.forEach((p) => {
+    const rn = p.roomNumber || p.room || p.roomNo || null;
+    const amt = Number(p.amount || 0) + Number(p.tax || 0) + Number(p.service || 0);
+    if (rn) {
+      postingsByRoom[String(rn)] = (postingsByRoom[String(rn)] || 0) + amt;
+    }
+  });
+
+  const nights = typeof calcNights === "function" ? Math.max(1, calcNights(reservation)) : 1;
+
+  // Build per-room rate/subtotal details (prefer posted totals if available, otherwise use rateFor)
+  const roomChargeDetails = (Array.isArray(reservation?.roomNumbers) ? reservation.roomNumbers : []).map(
+    (roomNo) => {
+      const roomType = rooms.find((r) => r.roomNumber === roomNo)?.roomType || "-";
+      const postedTotal = postingsByRoom[String(roomNo)] || null;
+      let rate = 0;
+      let subtotal = 0;
+      if (postedTotal && nights > 0) {
+        rate = Math.round(postedTotal / nights);
+        subtotal = postedTotal;
+      } else {
+        rate = Math.round(
+          Number(
+            rateFor(
+              roomType,
+              reservation?.channel,
+              new Date(reservation.checkInDate?.toDate?.() || reservation.checkInDate)
+            )
+          ) || 0
+        );
+        subtotal = rate * nights;
+      }
+      return { roomNo, roomType, rate, subtotal };
+    }
+  );
+
+  const roomChargesTotal = roomChargeDetails.reduce((s, r) => s + Number(r.subtotal || 0), 0);
+  const otherChargesTotal = otherChargePostings.reduce(
+    (s, p) => s + Number(p.amount || 0) + Number(p.tax || 0) + Number(p.service || 0),
+    0
+  );
+
+  // final combined charges total (excludes deposits)
+  const finalChargesTotal = roomChargesTotal + otherChargesTotal;
+
   // Balance (assume deposit returned at checkout, so subtract it)
   const computedBalance =
     typeof displayBalance === "number"
@@ -512,35 +575,37 @@ export default function ReservationDetailC(props) {
                   </tr>
                 </thead>
                 <tbody>
-                  {reservation?.roomNumbers?.map((roomNo, idx) => {
-                    const roomType =
-                      rooms.find((r) => r.roomNumber === roomNo)?.roomType || "-";
-                    const rate = Math.round(
-                      Number(
-                        rateFor(
-                          roomType,
-                          reservation?.channel,
-                          new Date(
-                            reservation.checkInDate?.toDate?.() ||
-                              reservation.checkInDate
-                          )
-                        )
-                      ) || 0
-                    );
-                    return (
-                      <tr key={roomNo}>
-                        <td>{idx + 1}</td>
-                        <td>{roomNo}</td>
-                        <td>{roomType}</td>
-                        <td style={{ textAlign: "right" }}>
-                          {currency} {fmtMoney(rate)}
-                        </td>
-                        <td style={{ textAlign: "right" }}>
-                          {currency} {fmtMoney(rate * calcNights(reservation))}
+                  {roomChargeDetails.map((rDetail, idx) => (
+                    <tr key={rDetail.roomNo || idx}>
+                      <td>{idx + 1}</td>
+                      <td>{rDetail.roomNo}</td>
+                      <td>{rDetail.roomType}</td>
+                      <td style={{ textAlign: "right" }}>
+                        {currency} {fmtMoney(rDetail.rate)}
+                      </td>
+                      <td style={{ textAlign: "right" }}>
+                        {currency} {fmtMoney(rDetail.subtotal)}
+                      </td>
+                    </tr>
+                  ))}
+                  {otherChargePostings.length > 0 && (
+                    <>
+                      <tr>
+                        <td colSpan={5} style={{ background: "#fafafa", fontWeight: 600 }}>
+                          Other charges
                         </td>
                       </tr>
-                    );
-                  })}
+                      {otherChargePostings.map((p, i) => (
+                        <tr key={`other-${i}`}>
+                          <td>{/* blank index */}</td>
+                          <td colSpan={2}>{p.description || p.accountCode || "Charge"}</td>
+                          <td style={{ textAlign: "right" }}>{currency} {fmtMoney(Number(p.amount||0))}</td>
+                          <td style={{ textAlign: "right" }}>{currency} {fmtMoney(Number(p.amount||0) + Number(p.tax||0) + Number(p.service||0))}</td>
+                        </tr>
+                      ))}
+                    </>
+                  )}
+
 
                   {/* Deposit Row */}
                   {computedDepositTotal > 0 && (
@@ -559,14 +624,16 @@ export default function ReservationDetailC(props) {
               {/* Totals */}
               <div style={{ textAlign: "right", marginBottom: 24 }}>
                 <div>
-                  <strong>Grand Total:</strong> {currency} {fmtMoney(computedChargesTotal)}
+                  <strong>Grand Total:</strong> {currency} {fmtMoney(finalChargesTotal)}
                 </div>
                 {templateConfig.showPaymentBreakdown && (
                   <div style={{ marginTop: 12, textAlign: "left" }}>
                     <h4>Payment Breakdown</h4>
                     <table style={{ width: "100%", borderCollapse: "collapse" }} border="1" cellPadding="6">
                       <tbody>
-                        {templateConfig.paymentTypes.map((type) => (
+                        {Object.keys(paymentsByType)
+                       .filter((t) => (paymentsByType[t] || 0) > 0)
+                        .map((type) => (
                           <tr key={type}>
                             <td>{type}</td>
                             <td style={{ textAlign: "right" }}>
@@ -596,20 +663,29 @@ export default function ReservationDetailC(props) {
                   </tr>
                 </thead>
                 <tbody>
-                  {lines.map((p, idx) => (
-                    <tr key={p.id || idx}>
-                      <td>{p.description}</td>
-                      <td style={{ textAlign: "right" }}>
-                        {currency}{" "}
-                        {fmtMoney(
-                          Number(p.amount || 0) +
-                            Number(p.tax || 0) +
-                            Number(p.service || 0)
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
+                    {roomChargeDetails.map((r, i) => (
+                      <tr key={`roomc-${i}`}>
+                        <td>{`Room ${r.roomNo} (${r.roomType})`}</td>
+                        <td style={{ textAlign: "right" }}>
+                          {currency} {fmtMoney(r.subtotal)}
+                        </td>
+                      </tr>
+                    ))}
+
+                    {lines.map((p, idx) => (
+                      <tr key={p.id || idx}>
+                        <td>{p.description}</td>
+                       <td style={{ textAlign: "right" }}>
+                          {currency}{" "}
+                          {fmtMoney(
+                            Number(p.amount || 0) +
+                              Number(p.tax || 0) +
+                              Number(p.service || 0)
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
               </table>
 
               {/* Payments Table */}

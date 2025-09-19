@@ -74,6 +74,55 @@ export default function ReservationDetailB(props) {
     }
   }
 
+  // --- Action wrappers that ensure logging for "global" actions done in this component ---
+  async function handleDoCheckIn() {
+    try {
+      if (typeof doCheckIn === "function") await doCheckIn();
+      await logReservationChange({ action: "check_in", data: null });
+    } catch (err) {
+      console.error("handleDoCheckIn failed:", err);
+    }
+  }
+
+  async function handleDoCheckOut() {
+    try {
+      if (typeof doCheckOut === "function") await doCheckOut();
+      await logReservationChange({ action: "checkout", data: null });
+    } catch (err) {
+      console.error("handleDoCheckOut failed:", err);
+    }
+  }
+
+  async function handleConfirmChangeRoom() {
+    try {
+      if (typeof doChangeRoom === "function") await doChangeRoom();
+      await logReservationChange({
+        action: "change_room",
+        data: { from: moveRoomStay?.roomNumber || null, to: newRoom || null },
+      });
+    } catch (err) {
+      console.error("handleConfirmChangeRoom failed:", err);
+    }
+  }
+
+  async function handleConfirmUpgradePreCheckIn() {
+    try {
+      if (typeof doUpgradePreCheckIn === "function") await doUpgradePreCheckIn();
+      await logReservationChange({ action: "upgrade_pre_checkin", data: { index: upgradeIndex, to: upgradePreRoom } });
+    } catch (err) {
+      console.error("handleConfirmUpgradePreCheckIn failed:", err);
+    }
+  }
+
+  async function handleConfirmUpgradeRoom() {
+    try {
+      if (typeof doUpgradeRoom === "function") await doUpgradeRoom();
+      await logReservationChange({ action: "upgrade_room", data: { from: upgradeStay?.roomNumber, to: upgradeRoom } });
+    } catch (err) {
+      console.error("handleConfirmUpgradeRoom failed:", err);
+    }
+  }
+
   // Subscribe to logs for this reservation
   useEffect(() => {
     if (!reservation?.id) return;
@@ -150,7 +199,7 @@ export default function ReservationDetailB(props) {
           <div className="form-actions" style={{ marginTop: 8 }}>
             {canOperate && (
               <>
-                <button className="btn-primary" onClick={doCheckIn}>
+                <button className="btn-primary" onClick={handleDoCheckIn}>
                   Check In
                 </button>
                 <button onClick={printCheckInForm} style={{ marginLeft: 8 }}>
@@ -196,7 +245,7 @@ export default function ReservationDetailB(props) {
                   <div className="form-actions" style={{ marginTop: 8 }}>
                     <button
                       className="btn-primary"
-                      onClick={doUpgradePreCheckIn}
+                      onClick={handleConfirmUpgradePreCheckIn}
                       disabled={!upgradePreRoom}
                     >
                       Confirm Upgrade
@@ -299,7 +348,7 @@ export default function ReservationDetailB(props) {
               </select>
 
               <div className="form-actions">
-                <button className="btn-primary" onClick={doChangeRoom} disabled={!newRoom}>
+                 <button className="btn-primary" onClick={handleConfirmChangeRoom} disabled={!newRoom}>
                   Confirm Change
                 </button>
                 <button
@@ -333,12 +382,12 @@ export default function ReservationDetailB(props) {
 
               <div className="form-actions">
                 <button
-                  className="btn-primary"
-                  onClick={doUpgradeRoom}
-                  disabled={!upgradeRoom}
-                >
-                  Confirm Upgrade
-                </button>
+               className="btn-primary"
+                onClick={handleConfirmUpgradeRoom}
+                disabled={!upgradeRoom}
+              >
+                Confirm Upgrade
+              </button>
                 <button
                   style={{ marginLeft: 8 }}
                   onClick={() => {
@@ -360,10 +409,12 @@ export default function ReservationDetailB(props) {
           guest,
           settings,
           rooms,
-          logReservationChange,  // pass logger down
+          logReservationChange, // pass logger down
         })}
 
-        {/* ✅ Logs Timeline */}
+      {/* ----------------------------
+          CHANGE LOG (always render last)
+          ---------------------------- */}
       <div className="reservation-form" style={{ marginTop: 24 }}>
         <h4>Change Log</h4>
         {logs.length === 0 && <div style={{ fontStyle: "italic" }}>No changes logged yet.</div>}
