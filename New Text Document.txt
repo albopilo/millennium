@@ -12,9 +12,7 @@ import {
   addDoc,
   updateDoc,
   deleteDoc,
-  setDoc,
-  onSnapshot,
-  orderBy
+  setDoc
 } from "firebase/firestore";
 import { db } from "../firebase";
 import { fmt, ymd } from "../lib/dates";
@@ -50,7 +48,6 @@ export default function ReservationDetail({ permissions = [], currentUser = null
   const [guest, setGuest] = useState(null);
   const [settings, setSettings] = useState({ currency: "IDR", depositPerRoom: 0 });
   const [channels, setChannels] = useState([]);
-  const [logs, setLogs] = useState([]);
 
       // Permissions
   const can = (p) => permissions.includes(p) || permissions.includes("*");
@@ -381,33 +378,17 @@ const deleteReservation = async (reason) => {
 
   // Audit log
   async function logAction(action, payload = {}) {
-    const now = new Date();
-    const entry = {
-      reservationId: reservation?.id || id,
-      action,
-      by: actorName,
-      at: now,
-      payload
-    };
-
     try {
-      // global collection (legacy / analytics)
-      await addDoc(collection(db, "reservation_logs"), entry);
-    } catch (err) {
-      console.log("logAction: failed to write global log", err);
+      await addDoc(collection(db, "reservation_logs"), {
+        reservationId: reservation?.id || id,
+        action,
+        by: actorName,
+        at: new Date(),
+        payload
+      });
+    } catch {
+      console.log("logAction: failed to write", action, payload);
     }
-
-    try {
-      // also write into reservation subcollection so UI can subscribe per-reservation
-     if (reservation?.id) {
-        await addDoc(collection(doc(db, "reservations", reservation.id), "logs"), {
-          ...entry,
-          createdAt: now
-        });
-      }
-    } catch (err) {
-      console.log("logAction: failed to write reservation sub-log", err);
-   }
   }
 
   // Ensure a single DEPOSIT posting exists
@@ -761,19 +742,6 @@ const deleteReservation = async (reason) => {
     if (id) load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
-
-  // Subscribe to reservation logs for UI (render at bottom)
-  useEffect(() => {
-    if (!reservation?.id) return;
-    const collRef = collection(doc(db, "reservations", reservation.id), "logs");
-    const q = query(collRef, orderBy("createdAt", "desc"));
-    const unsub = onSnapshot(q, (snap) => {
-      setLogs(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-    }, (err) => {
-      console.error("logs onSnapshot error:", err);
-    });
-    return () => unsub();
-  }, [reservation?.id]);
 
   // Folio (itemized lines before totals)
   const isBooked = (reservation?.status || "").toLowerCase() === "booked";
@@ -1380,9 +1348,6 @@ const printCheckInForm = () => {
           adultsChildren={adultsChildren}
           assignRooms={assignRooms}
           rooms={rooms}
-         rateFor={rateFor}
-            getEventForDate={getEventForDate}
-            logReservationChange={logAction}
           postings={postings}
           visiblePostings={visiblePostings}
           displayChargeLines={displayChargeLines}
@@ -1419,9 +1384,6 @@ const printCheckInForm = () => {
            guest={guest}
             settings={settings}
             rooms={rooms}
-            rateFor={rateFor}
-            getEventForDate={getEventForDate}
-            logReservationChange={logAction}
             assignRooms={assignRooms}
             renderAssignmentRow={renderAssignmentRow}
             setAssignRooms={setAssignRooms}
@@ -1467,9 +1429,6 @@ const printCheckInForm = () => {
             adultsChildren={adultsChildren}
             assignRooms={assignRooms}
             rooms={rooms}
-            rateFor={rateFor}
-            getEventForDate={getEventForDate}
-            logReservationChange={logAction}
             postings={postings}
             visiblePostings={visiblePostings}
             displayChargeLines={displayChargeLines}
@@ -1501,62 +1460,6 @@ const printCheckInForm = () => {
           />
         </>
       )}
-      {/* === Change Log at the bottom === */}
-<div className="card" style={{ marginTop: 24 }}>
-  <header className="card-header">
-    <h3>Change Log</h3>
-  </header>
-  <div className="card-body">
-    {logs.length === 0 ? (
-      <div style={{ fontStyle: "italic", color: "#64748b" }}>
-        No changes logged yet.
-      </div>
-    ) : (
-      <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
-        {logs.map((log) => {
-          const at = log.createdAt?.toDate
-            ? log.createdAt.toDate()
-            : log.at?.toDate
-            ? log.at.toDate()
-            : new Date(log.at || log.createdAt || Date.now());
-          return (
-            <li
-              key={log.id}
-              style={{
-                borderBottom: "1px solid #e2e8f0",
-                padding: "8px 0"
-              }}
-            >
-              <div style={{ fontSize: "0.9rem", marginBottom: 2 }}>
-                <strong>{log.by || "Unknown"}</strong>{" "}
-                <span style={{ color: "#475569" }}>{log.action}</span>
-              </div>
-              <div style={{ fontSize: "0.8rem", color: "#64748b" }}>
-                {at.toLocaleString("id-ID")}
-              </div>
-              {log.payload && (
-                <pre
-                  style={{
-                    fontSize: "0.75rem",
-                    background: "#f8fafc",
-                    padding: "4px 6px",
-                    borderRadius: 4,
-                    marginTop: 4,
-                    whiteSpace: "pre-wrap",
-                    wordBreak: "break-word"
-                  }}
-                >
-                  {JSON.stringify(log.payload, null, 2)}
-                </pre>
-              )}
-            </li>
-          );
-        })}
-      </ul>
-    )}
-  </div>
-</div>
-
     </div>
   );
 }

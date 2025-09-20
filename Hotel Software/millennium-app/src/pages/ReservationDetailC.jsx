@@ -456,9 +456,10 @@ export default function ReservationDetailC(props) {
 
   // inner FolioTotals component (defensive)
   function FolioTotals() {
-    const resStatus = ((reservation?.status || "") + "").toLowerCase();
-    const isCheckedOut = resStatus === "checked-out";
-    const isCheckedIn = resStatus === "checked-in";
+    const resStatusRaw = ((reservation?.status || "") + "").toLowerCase();
+    // be tolerant of different status string styles: 'checked-out', 'checked_out', 'checkedout', 'checked out'
+    const isCheckedOut = /checked[-_ ]?out/i.test(resStatusRaw);
+    const isCheckedIn = /checked[-_ ]?in/i.test(resStatusRaw);
 
     return (
       <div className="reservation-form folio" style={{ marginBottom: 12, width: "100%" }}>
@@ -538,7 +539,7 @@ export default function ReservationDetailC(props) {
             </>
           )}
 
-          {/* Checkout button: visible when checked-in; also shown (disabled) when checked-out per request */}
+          {/* Checkout button: visible when checked-in; also shown (disabled) when already checked-out */}
           {canOperate && (
             <button onClick={handleCheckout} disabled={isCheckedOut || !canOperate}>
               {isCheckedOut ? "Checkout (already checked-out)" : "Checkout"}
@@ -580,13 +581,13 @@ export default function ReservationDetailC(props) {
             </button>
           )}
 
-          {/* Print Check-in Form */}
-          {resStatus === "checked-in" && typeof printCheckInForm === "function" && (
+           {/* Print Check-in Form */}
+          {isCheckedIn && typeof printCheckInForm === "function" && (
             <button onClick={printCheckInForm}>Print Check-in Form</button>
           )}
 
           {/* Print Check-out Bill */}
-          {resStatus === "checked-out" && typeof printCheckOutBill === "function" && (
+          {isCheckedOut && typeof printCheckOutBill === "function" && (
             <button onClick={printCheckOutBill}>Print Check-out Bill</button>
           )}
 
@@ -785,10 +786,15 @@ export default function ReservationDetailC(props) {
                       </tr>
                       {otherChargePostings.map((p, i) => (
                         <tr key={`other-${i}`}>
-                          <td>{/* blank index */}</td>
+                          <td />
                           <td colSpan={2}>{p.description || p.accountCode || "Charge"}</td>
-                          <td style={{ textAlign: "right" }}>{currency} {fmtMoney(Number(p.amount||0))}</td>
-                          <td style={{ textAlign: "right" }}>{currency} {fmtMoney(Number(p.amount||0) + Number(p.tax||0) + Number(p.service||0))}</td>
+                          <td style={{ textAlign: "right" }}>
+                            {currency} {fmtMoney(Number(p.amount || 0))}
+                          </td>
+                          <td style={{ textAlign: "right" }}>
+                            {currency}{" "}
+                            {fmtMoney(Number(p.amount || 0) + Number(p.tax || 0) + Number(p.service || 0))}
+                          </td>
                         </tr>
                       ))}
                     </>
@@ -820,8 +826,8 @@ export default function ReservationDetailC(props) {
                     <table style={{ width: "100%", borderCollapse: "collapse" }} border="1" cellPadding="6">
                       <tbody>
                         {Object.keys(paymentsByType)
-                       .filter((t) => (paymentsByType[t] || 0) > 0)
-                        .map((type) => (
+                          .filter((t) => (paymentsByType[t] || 0) > 0)
+                          .map((type) => (
                           <tr key={type}>
                             <td>{type}</td>
                             <td style={{ textAlign: "right" }}>
@@ -936,20 +942,21 @@ export default function ReservationDetailC(props) {
                   Balance: {currency} {fmtMoney(computedBalance + (previewNow.applicable && !hasPersistedEarlyDepartureLines ? (previewNow.penalty - previewNow.refund) : 0))}
                 </div>
 
-                {/* Payment breakdown by type */}
                 {templateConfig.showPaymentBreakdown && (
                   <div style={{ marginTop: 12, textAlign: "left" }}>
                     <h4>Payment Breakdown</h4>
                     <table style={{ width: "100%", borderCollapse: "collapse" }} border="1" cellPadding="6">
                       <tbody>
-                        {Object.keys(paymentsByType).map((type) => (
-                          <tr key={type}>
-                            <td>{type}</td>
-                            <td style={{ textAlign: "right" }}>
-                              {currency} {fmtMoney(paymentsByType[type] || 0)}
-                            </td>
-                          </tr>
-                        ))}
+                        {Object.keys(paymentsByType)
+                          .filter((t) => (paymentsByType[t] || 0) > 0)
+                          .map((type) => (
+                            <tr key={type}>
+                              <td>{type}</td>
+                              <td style={{ textAlign: "right" }}>
+                                {currency} {fmtMoney(paymentsByType[type] || 0)}
+                              </td>
+                            </tr>
+                          ))}
                       </tbody>
                     </table>
                   </div>

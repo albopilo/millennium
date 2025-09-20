@@ -192,7 +192,7 @@ export default function AppLayout({
             </Link>
           )}
 
-          {can("*") && (
+          { (can("*") || can("canManageSettings")) && (
             <>
               <Link to="/room-blocks" style={linkStyleBase}>
                 <Blocks size={18} />
