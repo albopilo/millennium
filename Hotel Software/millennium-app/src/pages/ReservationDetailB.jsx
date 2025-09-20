@@ -86,8 +86,46 @@ export default function ReservationDetailB(props) {
 
   async function handleDoCheckOut() {
     try {
+      // ✅ Trigger checkout (existing parent handler if any)
       if (typeof doCheckOut === "function") await doCheckOut();
-      await logReservationChange({ action: "checkout", data: null });
+
+      // ✅ Record actual checkout date in reservation
+      if (reservation?.id) {
+        const reservationRef = doc(db, "reservations", reservation.id);
+        await addDoc(collection(reservationRef, "logs"), {
+          reservationId: reservation.id,
+          action: "early_checkout_adjustment",
+          data: {
+            plannedCheckOut: reservation.checkOutDate || null,
+            actualCheckOut: new Date().toISOString(),
+            penalty: settings?.earlyDeparturePenalty || 0,
+            refund: settings?.earlyDepartureRefund || 0,
+          },
+          actorUid: currentUser?.uid || null,
+          actorEmail: currentUser?.email || "unknown",
+          actorDisplay: currentUser?.displayName || null,
+          createdAt: serverTimestamp(),
+        });
+
+        // ✅ Apply adjustments directly into reservation doc
+        await updateDoc(reservationRef, {
+          status: "checked-out",
+          actualCheckOutDate: serverTimestamp(),
+          folioAdjustments: {
+            penalty: settings?.earlyDeparturePenalty || 0,
+            refund: settings?.earlyDepartureRefund || 0,
+          },
+        });
+      }
+
+      // ✅ Always log a checkout event
+      await logReservationChange({
+        action: "checkout",
+        data: {
+          penalty: settings?.earlyDeparturePenalty || 0,
+          refund: settings?.earlyDepartureRefund || 0,
+        },
+      });
     } catch (err) {
       console.error("handleDoCheckOut failed:", err);
     }

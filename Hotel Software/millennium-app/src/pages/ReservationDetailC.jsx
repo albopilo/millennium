@@ -1,3 +1,4 @@
+// src/pages/ReservationDetailC.jsx
 import React, { useEffect, useState } from "react";
 import { doc, getDoc } from "firebase/firestore";
 import { db } from "../firebase";
@@ -67,6 +68,10 @@ export default function ReservationDetailC(props) {
 
     // logging callback: implement logging (who/where) in ReservationDetailB.jsx or parent
     logReservationChange = () => {},
+
+    // OPTIONAL hook: parent can pass a function to persist early-departure postings/payments
+    // signature: async ({ penalty, refund, unusedNights, actualCheckOutDate }) => { ... }
+    applyEarlyDepartureAdjustments = null,
   } = props;
 
   // 🔹 NEW: load print template config
@@ -75,6 +80,12 @@ export default function ReservationDetailC(props) {
     footer: "Thank you for staying with us!",
     showPaymentBreakdown: true,
     paymentTypes: ["Cash", "QRIS", "OTA", "Debit", "Credit"],
+  });
+
+  // 🔹 NEW: load early departure policy (fallback to settings prop)
+  const [earlyDepartureConfig, setEarlyDepartureConfig] = useState({
+    penaltyPercent: 0,
+    refundPercent: 0,
   });
 
   useEffect(() => {
@@ -91,6 +102,31 @@ export default function ReservationDetailC(props) {
     }
     loadTemplate();
   }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    async function loadEarlyDeparture() {
+      try {
+        // prefer explicit settings prop if it contains earlyDeparture
+        if (settings && settings.earlyDeparture) {
+          if (!mounted) return;
+          setEarlyDepartureConfig((prev) => ({ ...prev, ...settings.earlyDeparture }));
+          return;
+        }
+        const snap = await getDoc(doc(db, "settings", "earlyDeparture"));
+        if (!mounted) return;
+        if (snap.exists()) {
+          setEarlyDepartureConfig((prev) => ({ ...prev, ...snap.data() }));
+        }
+      } catch (err) {
+        console.error("Failed to load earlyDeparture settings:", err);
+      }
+    }
+    loadEarlyDeparture();
+    return () => {
+      mounted = false;
+    };
+  }, [settings]);
 
   // Defensive posted lines selection (fallback precedence)
   const safeVisiblePostings = Array.isArray(displayChargeLines)
@@ -245,6 +281,74 @@ export default function ReservationDetailC(props) {
     paymentsByType[t] = (paymentsByType[t] || 0) + Number(p.amount || 0);
   }
 
+  // -------------------------
+  // Early departure preview
+  // -------------------------
+  // Skip preview if there are already early-departure lines persisted (we don't want to double-count).
+  const hasPersistedEarlyDepartureLines = activePostings.some((p) =>
+    ["EARLY_PENALTY", "EARLY_REFUND", "EARLY_DEPARTURE"].includes(((p.accountCode || "") + "").toUpperCase())
+  );
+
+  function _toDate(v) {
+    if (!v) return null;
+    return typeof v?.toDate === "function" ? v.toDate() : new Date(v);
+  }
+
+  function computeEarlyDeparturePreview({ actualCheckoutDate = new Date() } = {}) {
+    // if policy zeros out both -> no adjustment.
+    const penaltyPercent = Number(earlyDepartureConfig?.penaltyPercent || 0);
+    const refundPercent = Number(earlyDepartureConfig?.refundPercent || 0);
+    if (penaltyPercent === 0 && refundPercent === 0) {
+      return { applicable: false, unusedNights: 0, unusedAmount: 0, penalty: 0, refund: 0 };
+    }
+    // if persisted already, don't preview (prevents double counting)
+    if (hasPersistedEarlyDepartureLines) {
+      return { applicable: false, unusedNights: 0, unusedAmount: 0, penalty: 0, refund: 0 };
+    }
+
+    const checkIn = _toDate(reservation?.checkInDate) || new Date();
+    const scheduledCheckOut = _toDate(reservation?.checkOutDate) || new Date(checkIn.getTime() + nights * 24 * 3600 * 1000);
+    // scheduled nights already in variable 'nights'
+    const scheduledNights = nights;
+
+    // compute actual nights stayed using actualCheckoutDate
+    const aCheckout = actualCheckoutDate instanceof Date ? actualCheckoutDate : new Date(actualCheckoutDate);
+    // normalize time-of-day: we want integer count of nights; use difference in ms divided by 24h and round up
+    const msPerDay = 24 * 3600 * 1000;
+    let actualNights = Math.max(1, Math.ceil((aCheckout - checkIn) / msPerDay));
+    if (!isFinite(actualNights) || actualNights < 0) actualNights = 1;
+
+    const unusedNights = Math.max(0, scheduledNights - actualNights);
+    if (unusedNights <= 0) {
+      return { applicable: false, unusedNights: 0, unusedAmount: 0, penalty: 0, refund: 0 };
+    }
+
+    // compute per-night total (sum of room rates per night)
+    const perNightTotal = roomChargeDetails.reduce((s, r) => s + Number(r.rate || 0), 0);
+    const unusedAmount = perNightTotal * unusedNights;
+
+    const penalty = Math.round((unusedAmount * penaltyPercent) / 100);
+    const refund = Math.round((unusedAmount * refundPercent) / 100);
+
+    return {
+      applicable: true,
+      unusedNights,
+      unusedAmount,
+      penalty,
+      refund,
+      perNightTotal,
+      actualNights,
+    };
+  }
+
+  // preview based on "if checkout now"
+  const previewNow = computeEarlyDeparturePreview({ actualCheckoutDate: new Date() });
+
+  // compute adjusted totals (UI-only preview)
+  const computedChargesTotalAdjusted = computedChargesTotal + (previewNow.penalty || 0);
+  const computedPaymentsTotalAdjusted = computedPaymentsTotal + (previewNow.refund || 0);
+  const computedBalanceAdjusted = (computedBalance || 0) + (previewNow.penalty || 0) - (previewNow.refund || 0);
+
   // action wrappers that also call the logging callback (logger should be provided by ReservationDetailB.jsx)
   const handleSubmitCharge = async () => {
     const snapshot = { ...chargeForm };
@@ -299,13 +403,43 @@ export default function ReservationDetailC(props) {
     }
   };
 
+  // --------- UPDATED handleCheckout: call optional apply hook BEFORE actual checkout -------------
   const handleCheckout = async () => {
     try {
+      // compute preview based on "checkout now"
+      const adj = computeEarlyDeparturePreview({ actualCheckoutDate: new Date() });
+
+      // If parent provided applyEarlyDepartureAdjustments, call it so parent can persist postings/payments
+      if (adj.applicable && typeof applyEarlyDepartureAdjustments === "function") {
+        try {
+          await applyEarlyDepartureAdjustments({
+            penalty: adj.penalty,
+            refund: adj.refund,
+            unusedNights: adj.unusedNights,
+            perNightTotal: adj.perNightTotal,
+            actualCheckOutDate: new Date(),
+          });
+          // record in change log
+          if (typeof logReservationChange === "function") {
+            logReservationChange({
+              reservationId: reservation?.id || reservation?.reservationId || null,
+              action: "apply_early_departure_adjustment",
+              data: { penalty: adj.penalty, refund: adj.refund, unusedNights: adj.unusedNights },
+            });
+          }
+        } catch (err) {
+          console.error("applyEarlyDepartureAdjustments failed:", err);
+          // Continue to attempt checkout even if the optional persistence failed (you can change this)
+        }
+      }
+
+      // then perform actual checkout via parent callback
       if (typeof props.checkoutReservation === "function") {
         await props.checkoutReservation();
       } else if (typeof props.doCheckOut === "function") {
         await props.doCheckOut();
       }
+
       if (typeof logReservationChange === "function") {
         logReservationChange({
           reservationId: reservation?.id || reservation?.reservationId || null,
@@ -367,9 +501,26 @@ export default function ReservationDetailC(props) {
             <div className="t-label">Deposit</div>
             <div className="t-value">{currency} {fmtMoney(computedDepositTotal)}</div>
           </div>
+
+          {/* Previewed EARLY DEPARTURE rows (UI-only unless parent persists them) */}
+          {previewNow.applicable && !isCheckedOut && (
+            <>
+              <div className="tot-row">
+                <div className="t-label">Early departure penalty</div>
+                <div className="t-value">{currency} {fmtMoney(previewNow.penalty)}</div>
+              </div>
+              <div className="tot-row">
+                <div className="t-label">Early departure refund</div>
+                <div className="t-value">-{currency} {fmtMoney(previewNow.refund)}</div>
+              </div>
+            </>
+          )}
+
           <div className="tot-row grand">
             <div className="t-label">Balance</div>
-            <div className="t-value">{currency} {fmtMoney(computedBalance)}</div>
+            <div className="t-value">
+              {currency} {fmtMoney(isCheckedOut ? computedBalance : computedBalanceAdjusted)}
+            </div>
           </div>
         </div>
 
@@ -391,6 +542,41 @@ export default function ReservationDetailC(props) {
           {canOperate && (
             <button onClick={handleCheckout} disabled={isCheckedOut || !canOperate}>
               {isCheckedOut ? "Checkout (already checked-out)" : "Checkout"}
+            </button>
+          )}
+
+          {/* Optional helper to apply adjustments then checkout (visible only if preview applies) */}
+          {!isCheckedOut && previewNow.applicable && (
+            <button
+              onClick={async () => {
+                try {
+                  // If parent gave an apply hook we call it, then we call handleCheckout
+                  if (typeof applyEarlyDepartureAdjustments === "function") {
+                    await applyEarlyDepartureAdjustments({
+                      penalty: previewNow.penalty,
+                      refund: previewNow.refund,
+                      unusedNights: previewNow.unusedNights,
+                      perNightTotal: previewNow.perNightTotal,
+                      actualCheckOutDate: new Date(),
+                    });
+                    if (typeof logReservationChange === "function") {
+                      logReservationChange({
+                        reservationId: reservation?.id || reservation?.reservationId || null,
+                        action: "apply_early_departure_adjustment",
+                        data: { penalty: previewNow.penalty, refund: previewNow.refund, unusedNights: previewNow.unusedNights },
+                      });
+                    }
+                  } else {
+                    // no apply hook: we still let the user checkout; the preview remains UI-only.
+                    console.log("No applyEarlyDepartureAdjustments() provided — preview only.");
+                  }
+                  await handleCheckout();
+                } catch (err) {
+                  console.error("apply & checkout failed", err);
+                }
+              }}
+            >
+              Apply adjustment & Checkout
             </button>
           )}
 
@@ -687,6 +873,27 @@ export default function ReservationDetailC(props) {
                         </td>
                       </tr>
                     ))}
+
+                    {/* Print preview of early-departure adjustments if present (either persisted or computed preview) */}
+                    {(() => {
+                      // if persisted posted lines exist, they were included in `lines` already;
+                      // if not persisted, but preview is applicable, print those preview rows
+                      if (!hasPersistedEarlyDepartureLines && previewNow.applicable) {
+                        return (
+                          <>
+                            <tr>
+                              <td>Early departure penalty</td>
+                              <td style={{ textAlign: "right" }}>{currency} {fmtMoney(previewNow.penalty)}</td>
+                            </tr>
+                            <tr>
+                              <td>Early departure refund</td>
+                              <td style={{ textAlign: "right" }}>-{currency} {fmtMoney(previewNow.refund)}</td>
+                            </tr>
+                          </>
+                        );
+                      }
+                      return null;
+                    })()}
                   </tbody>
               </table>
 
@@ -717,16 +924,16 @@ export default function ReservationDetailC(props) {
               {/* Totals */}
               <div style={{ textAlign: "right", marginBottom: 24 }}>
                 <div>
-                  Total Charges: {currency} {fmtMoney(computedChargesTotal)}
+                  Total Charges: {currency} {fmtMoney(computedChargesTotal + (previewNow.applicable && !hasPersistedEarlyDepartureLines ? previewNow.penalty : 0))}
                 </div>
                 <div>
-                  Total Payments: {currency} {fmtMoney(computedPaymentsTotal)}
+                  Total Payments: {currency} {fmtMoney(computedPaymentsTotal + (previewNow.applicable && !hasPersistedEarlyDepartureLines ? previewNow.refund : 0))}
                 </div>
                 <div>
                   Total Deposit: {currency} {fmtMoney(computedDepositTotal)}
                 </div>
                 <div style={{ fontWeight: 700, marginTop: 8 }}>
-                  Balance: {currency} {fmtMoney(computedBalance)}
+                  Balance: {currency} {fmtMoney(computedBalance + (previewNow.applicable && !hasPersistedEarlyDepartureLines ? (previewNow.penalty - previewNow.refund) : 0))}
                 </div>
 
                 {/* Payment breakdown by type */}
