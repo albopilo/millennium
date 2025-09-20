@@ -248,6 +248,23 @@ const deleteReservation = async (reason) => {
     return `${curr || "IDR"} ${isNaN(v) ? "-" : v.toLocaleString("id-ID")}`;
   }
 
+    function fmtCurrency(curr, n) {
+    const v = Number(n || 0);
+    return `${curr || "IDR"} ${isNaN(v) ? "-" : v.toLocaleString("id-ID")}`;
+  }
+
+  // === Safe log data stringifier for UI ===
+  function safeRenderLogData(payload) {
+    if (!payload) return null;
+    try {
+      return JSON.stringify(payload, null, 2);
+    } catch (err) {
+      console.warn("Failed to stringify log payload", err, payload);
+      return String(payload);
+    }
+  }
+
+
   const getEventForDate = (date) => {
     return events.find((ev) => {
       const start = new Date(ev.startDate);
@@ -1501,7 +1518,7 @@ const printCheckInForm = () => {
           />
         </>
       )}
-      {/* === Change Log at the bottom === */}
+      {/* === Change Log at the bottom (always visible) === */}
 <div className="card" style={{ marginTop: 24 }}>
   <header className="card-header">
     <h3>Change Log</h3>
@@ -1528,7 +1545,7 @@ const printCheckInForm = () => {
               }}
             >
               <div style={{ fontSize: "0.9rem", marginBottom: 2 }}>
-                <strong>{log.by || "Unknown"}</strong>{" "}
+                <strong>{log.by || log.actorDisplay || log.actorEmail || "Unknown"}</strong>{" "}
                 <span style={{ color: "#475569" }}>{log.action}</span>
               </div>
               <div style={{ fontSize: "0.8rem", color: "#64748b" }}>
@@ -1546,7 +1563,7 @@ const printCheckInForm = () => {
                     wordBreak: "break-word"
                   }}
                 >
-                  {JSON.stringify(log.payload, null, 2)}
+                  {safeRenderLogData(log.payload)}
                 </pre>
               )}
             </li>
