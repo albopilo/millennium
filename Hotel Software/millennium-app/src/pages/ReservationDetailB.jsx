@@ -1,6 +1,6 @@
 // src/pages/ReservationDetailB.jsx
 import React, { useState, useEffect } from "react";
-import { addDoc, collection, serverTimestamp, doc, query, orderBy, onSnapshot } from "firebase/firestore";
+import { addDoc, collection, serverTimestamp, doc, updateDoc, query, orderBy, onSnapshot } from "firebase/firestore";
 import { db } from "../firebase";
 
 
