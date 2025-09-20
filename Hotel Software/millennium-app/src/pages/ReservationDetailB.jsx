@@ -410,6 +410,7 @@ export default function ReservationDetailB(props) {
           settings,
           rooms,
           logReservationChange, // pass logger down
+          checkoutReservation: handleDoCheckOut, // ✅ enable early checkout
         })}
 
       {/* ----------------------------

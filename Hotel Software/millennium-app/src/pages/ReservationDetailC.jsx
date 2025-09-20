@@ -303,17 +303,19 @@ export default function ReservationDetailC(props) {
     try {
       if (typeof props.checkoutReservation === "function") {
         await props.checkoutReservation();
-        if (typeof logReservationChange === "function") {
-          logReservationChange({
-            reservationId: reservation?.id || reservation?.reservationId || null,
-            action: "checkout",
-            data: null,
-            ts: Date.now(),
-          });
-        }
+      } else if (typeof props.doCheckOut === "function") {
+        await props.doCheckOut();
+      }
+      if (typeof logReservationChange === "function") {
+        logReservationChange({
+          reservationId: reservation?.id || reservation?.reservationId || null,
+          action: "checkout",
+          data: null,
+          ts: Date.now(),
+        });
       }
     } catch (err) {
-      console.error("checkoutReservation failed:", err);
+      console.error("handleCheckout failed:", err);
       throw err;
     }
   };
