@@ -251,7 +251,7 @@ export default function ReservationDetailC(props) {
   const computedBalance =
     typeof displayBalance === "number"
       ? displayBalance
-      : computedChargesTotal - computedPaymentsTotal - computedDepositTotal;
+      : finalChargesTotalForBill - computedPaymentsTotal - computedDepositTotal;
 
   // Helper to normalize payment method strings into canonical types used by the template
   function mapMethodToType(method) {
@@ -347,7 +347,7 @@ export default function ReservationDetailC(props) {
   const previewNow = computeEarlyDeparturePreview({ actualCheckoutDate: new Date() });
 
   // compute adjusted totals (UI-only preview)
-  const computedChargesTotalAdjusted = computedChargesTotal + (previewNow.penalty || 0);
+  const finalChargesTotalForBillAdjusted = finalChargesTotalForBill + (previewNow.penalty || 0);
   const computedPaymentsTotalAdjusted = computedPaymentsTotal + (previewNow.refund || 0);
   const computedBalanceAdjusted = (computedBalance || 0) + (previewNow.penalty || 0) - (previewNow.refund || 0);
 
@@ -494,7 +494,7 @@ export default function ReservationDetailC(props) {
         <div className="folio-totals">
           <div className="tot-row">
             <div className="t-label">Charges</div>
-            <div className="t-value">{currency} {fmtMoney(computedChargesTotal)}</div>
+            <div className="t-value">{currency} {fmtMoney(finalChargesTotalForBill)}</div>
           </div>
           <div className="tot-row">
             <div className="t-label">Payments</div>
