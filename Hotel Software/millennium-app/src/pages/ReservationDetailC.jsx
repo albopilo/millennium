@@ -857,51 +857,38 @@ export default function ReservationDetailC(props) {
                   </tr>
                 </thead>
                 <tbody>
-                    {roomChargeDetails.map((r, i) => (
-                      <tr key={`roomc-${i}`}>
-                        <td>{`Room ${r.roomNo} (${r.roomType})`}</td>
-                        <td style={{ textAlign: "right" }}>
-                          {currency} {fmtMoney(r.subtotal)}
-                        </td>
-                      </tr>
-                    ))}
+                    
+                    {lines
+      .filter((p) => ((p.accountCode || "").toUpperCase() !== "DEPOSIT")) // 🚫 exclude deposits
+      .map((p, idx) => (
+        <tr key={p.id || idx}>
+          <td>{p.description}</td>
+          <td style={{ textAlign: "right" }}>
+            {currency} {fmtMoney(Number(p.amount || 0) + Number(p.tax || 0) + Number(p.service || 0))}
+          </td>
+        </tr>
+      ))}
 
-                    {lines.map((p, idx) => (
-                      <tr key={p.id || idx}>
-                        <td>{p.description}</td>
-                       <td style={{ textAlign: "right" }}>
-                          {currency}{" "}
-                          {fmtMoney(
-                            Number(p.amount || 0) +
-                              Number(p.tax || 0) +
-                              Number(p.service || 0)
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-
-                    {/* Print preview of early-departure adjustments if present (either persisted or computed preview) */}
-                    {(() => {
-                      // if persisted posted lines exist, they were included in `lines` already;
-                      // if not persisted, but preview is applicable, print those preview rows
-                      if (!hasPersistedEarlyDepartureLines && previewNow.applicable) {
-                        return (
-                          <>
-                            <tr>
-                              <td>Early departure penalty</td>
-                              <td style={{ textAlign: "right" }}>{currency} {fmtMoney(previewNow.penalty)}</td>
-                            </tr>
-                            <tr>
-                              <td>Early departure refund</td>
-                              <td style={{ textAlign: "right" }}>-{currency} {fmtMoney(previewNow.refund)}</td>
-                            </tr>
-                          </>
-                        );
-                      }
-                      return null;
-                    })()}
-                  </tbody>
-              </table>
+    {/* Early departure adjustments */}
+    {(() => {
+      if (!hasPersistedEarlyDepartureLines && previewNow.applicable) {
+        return (
+          <>
+            <tr>
+              <td>Early departure penalty</td>
+              <td style={{ textAlign: "right" }}>{currency} {fmtMoney(previewNow.penalty)}</td>
+            </tr>
+            <tr>
+              <td>Early departure refund</td>
+              <td style={{ textAlign: "right" }}>-{currency} {fmtMoney(previewNow.refund)}</td>
+            </tr>
+          </>
+        );
+      }
+      return null;
+    })()}
+  </tbody>
+</table>
 
               {/* Payments Table */}
               {validPayments.length > 0 && (
