@@ -1486,7 +1486,8 @@ const printCheckInForm = () => {
           {/* Render folio + action section too (non-print mode) */}
           <ReservationDetailC
             printRef={printRef}
-            printMode={null}
+            printMode={printMode}
+            printCheckOutBill={printCheckOutBill}
             reservation={reservation}
             settings={settings}
             fmtDMY={fmtDMY}
@@ -1552,23 +1553,29 @@ const printCheckInForm = () => {
 
   const actor = log.by || log.actorDisplay || log.actorEmail || "Unknown";
 
-  // Handle action gracefully
-  let actionText = "";
+  // Normalize action
+  let action = "";
   if (typeof log.action === "string") {
-    actionText = log.action;
+    action = log.action;
   } else if (log.action && typeof log.action === "object") {
-    actionText = log.action.action || JSON.stringify(log.action);
+    action = log.action.action || "";
   }
+  action = action.replace(/[_-]/g, " ").toUpperCase();
 
-  actionText = (actionText || "").replace(/[_-]/g, " ").toUpperCase();
-
-  // Payload extraction
-  const payload = log.payload || {};
-  let payloadText = "";
+  // Normalize payload
+  const payload = log.payload || log.action?.data || {};
+  const payloadLines = [];
   if (payload.rooms) {
-    payloadText = `Rooms: ${payload.rooms.join(", ")}`;
-  } else if (Object.keys(payload).length > 0) {
-    payloadText = JSON.stringify(payload);
+    payloadLines.push(`Rooms: ${payload.rooms.join(", ")}`);
+  }
+  if (payload.amountStr) {
+    payloadLines.push(`Amount: ${payload.amountStr}`);
+  }
+  if (payload.method) {
+    payloadLines.push(`Method: ${payload.method}`);
+  }
+  if (payload.refNo !== undefined) {
+    payloadLines.push(`Ref: ${payload.refNo || "-"}`);
   }
 
   return (
@@ -1579,12 +1586,19 @@ const printCheckInForm = () => {
         padding: "8px 0"
       }}
     >
-      <div style={{ fontWeight: 600 }}>{actionText}</div>
-      {payloadText && (
+      {/* Action Title */}
+      <div style={{ fontWeight: 600 }}>{action}</div>
+
+      {/* Payload Lines */}
+      {payloadLines.length > 0 && (
         <div style={{ fontSize: "0.9rem", color: "#475569", marginTop: 2 }}>
-          {payloadText}
+          {payloadLines.map((line, idx) => (
+            <div key={idx}>{line}</div>
+          ))}
         </div>
       )}
+
+      {/* Meta */}
       <div style={{ fontSize: "0.8rem", color: "#64748b", marginTop: 4 }}>
         {at.toLocaleString("id-ID", {
           day: "2-digit",
