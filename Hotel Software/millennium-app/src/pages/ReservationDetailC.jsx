@@ -153,7 +153,8 @@ export default function ReservationDetailC(props) {
 
   // IMPORTANT: exclude DEPOSIT from "charges" — deposits are not revenue
   const lines = baseLines.filter((p) => ((p.accountCode || "") + "").toUpperCase() !== "DEPOSIT");
-
+  // preview based on "if checkout now"
+  const previewNow = computeEarlyDeparturePreview({ actualCheckoutDate: new Date() });
   // Totals (charges exclude DEPOSIT now)
   const finalChargesTotalForBill =
   lines.reduce(
@@ -342,9 +343,6 @@ export default function ReservationDetailC(props) {
       actualNights,
     };
   }
-
-  // preview based on "if checkout now"
-  const previewNow = computeEarlyDeparturePreview({ actualCheckoutDate: new Date() });
 
   // compute adjusted totals (UI-only preview)
   const finalChargesTotalForBillAdjusted = finalChargesTotalForBill + (previewNow.penalty || 0);
