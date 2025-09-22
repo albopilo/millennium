@@ -395,36 +395,47 @@ function safeRenderLogData(payload) {
     });
   }
 
-  // Audit log
-  async function logAction(action, payload = {}) {
-    const now = new Date();
-    const entry = {
-      reservationId: reservation?.id || id,
-      action,
-      by: actorName,
-      at: now,
-      payload
-    };
+ // Audit log (tolerant signature: accepts (action, payload) OR ({ action, data|payload }))
+async function logAction(actionOrObj, payload = {}) {
+  // normalize inputs so we always have a string `action` and an object `payloadObj`
+  let action = actionOrObj;
+  let payloadObj = payload;
 
-    try {
-      // global collection (legacy / analytics)
-      await addDoc(collection(db, "reservation_logs"), entry);
-    } catch (err) {
-      console.log("logAction: failed to write global log", err);
-    }
-
-    try {
-      // also write into reservation subcollection so UI can subscribe per-reservation
-     if (reservation?.id) {
-        await addDoc(collection(doc(db, "reservations", reservation.id), "logs"), {
-          ...entry,
-          createdAt: now
-        });
-      }
-    } catch (err) {
-      console.log("logAction: failed to write reservation sub-log", err);
-   }
+  if (actionOrObj && typeof actionOrObj === "object" && !Array.isArray(actionOrObj)) {
+    // Either { action, data } or { action, payload } or similar
+    action = actionOrObj.action || actionOrObj.actionType || "unknown";
+    payloadObj = actionOrObj.data ?? actionOrObj.payload ?? {};
   }
+
+  const now = new Date();
+  const entry = {
+    reservationId: reservation?.id || id,
+    action,
+    by: actorName,
+    at: now,
+    payload: payloadObj
+  };
+
+  try {
+    // global collection (legacy / analytics)
+    await addDoc(collection(db, "reservation_logs"), entry);
+  } catch (err) {
+    console.log("logAction: failed to write global log", err);
+  }
+
+  try {
+    // also write into reservation subcollection so UI can subscribe per-reservation
+    if (reservation?.id) {
+      await addDoc(collection(doc(db, "reservations", reservation.id), "logs"), {
+        ...entry,
+        createdAt: now
+      });
+    }
+  } catch (err) {
+    console.log("logAction: failed to write reservation sub-log", err);
+  }
+}
+
 
   // Ensure a single DEPOSIT posting exists
   // NOTE: to avoid race-created duplicate deposits we write a deterministic doc id:
@@ -1545,7 +1556,10 @@ const printCheckInForm = () => {
             >
               <div style={{ fontSize: "0.9rem", marginBottom: 2 }}>
                 <strong>{log.by || log.actorDisplay || log.actorEmail || "Unknown"}</strong>{" "}
-                <span style={{ color: "#475569" }}>{log.action}</span>
+                <span style={{ color: "#475569" }}>
+  {typeof log.action === "string" ? log.action : JSON.stringify(log.action)}
+</span>
+
               </div>
               <div style={{ fontSize: "0.8rem", color: "#64748b" }}>
                 {at.toLocaleString("id-ID")}

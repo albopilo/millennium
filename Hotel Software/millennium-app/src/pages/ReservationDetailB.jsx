@@ -52,7 +52,7 @@ export default function ReservationDetailB(props) {
   async function handleDoCheckIn() {
     try {
       if (typeof doCheckIn === "function") await doCheckIn();
-      await logReservationChange({ action: "check_in", data: null });
+      await logReservationChange("check_in", { data: null });
     } catch (err) {
       console.error("handleDoCheckIn failed:", err);
     }
@@ -63,9 +63,7 @@ export default function ReservationDetailB(props) {
       // ✅ Trigger checkout (existing parent handler if any)
       if (typeof doCheckOut === "function") await doCheckOut();
       if (typeof logReservationChange === "function") {
-        await logReservationChange({
-          action: "checkout",
-          data: {
+        await logReservationChange("checkout", { data: {
             penalty: settings?.earlyDeparturePenalty || 0,
             refund: settings?.earlyDepartureRefund || 0,
           },
@@ -79,9 +77,7 @@ export default function ReservationDetailB(props) {
   async function handleConfirmChangeRoom() {
     try {
       if (typeof doChangeRoom === "function") await doChangeRoom();
-      await logReservationChange({
-        action: "change_room",
-        data: { from: moveRoomStay?.roomNumber || null, to: newRoom || null },
+      await logReservationChange("change_room", { data: { from: moveRoomStay?.roomNumber || null, to: newRoom || null },
       });
     } catch (err) {
       console.error("handleConfirmChangeRoom failed:", err);
@@ -91,7 +87,7 @@ export default function ReservationDetailB(props) {
   async function handleConfirmUpgradePreCheckIn() {
     try {
       if (typeof doUpgradePreCheckIn === "function") await doUpgradePreCheckIn();
-      await logReservationChange({ action: "upgrade_pre_checkin", data: { index: upgradeIndex, to: upgradePreRoom } });
+      await logReservationChange("upgrade_pre_checkin", { data: { index: upgradeIndex, to: upgradePreRoom } });
     } catch (err) {
       console.error("handleConfirmUpgradePreCheckIn failed:", err);
     }
@@ -100,7 +96,7 @@ export default function ReservationDetailB(props) {
   async function handleConfirmUpgradeRoom() {
     try {
       if (typeof doUpgradeRoom === "function") await doUpgradeRoom();
-      await logReservationChange({ action: "upgrade_room", data: { from: upgradeStay?.roomNumber, to: upgradeRoom } });
+      await logReservationChange("upgrade_room", { data: { from: upgradeStay?.roomNumber, to: upgradeRoom } });
     } catch (err) {
       console.error("handleConfirmUpgradeRoom failed:", err);
     }
