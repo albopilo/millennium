@@ -254,16 +254,15 @@ const deleteReservation = async (reason) => {
   }
 
   // === Safe log data stringifier for UI ===
-  function safeRenderLogData(payload) {
-    if (!payload) return null;
-    try {
-      return JSON.stringify(payload, null, 2);
-    } catch (err) {
-      console.warn("Failed to stringify log payload", err, payload);
-      return String(payload);
-    }
+function safeRenderLogData(payload) {
+  if (!payload) return "";
+  try {
+    return JSON.stringify(payload, null, 2); // always a string
+  } catch (err) {
+    console.error("safeRenderLogData error:", err, payload);
+    return String(payload);
   }
-
+}
 
   const getEventForDate = (date) => {
     return events.find((ev) => {
@@ -1552,20 +1551,21 @@ const printCheckInForm = () => {
                 {at.toLocaleString("id-ID")}
               </div>
               {log.payload && (
-                <pre
-                  style={{
-                    fontSize: "0.75rem",
-                    background: "#f8fafc",
-                    padding: "4px 6px",
-                    borderRadius: 4,
-                    marginTop: 4,
-                    whiteSpace: "pre-wrap",
-                    wordBreak: "break-word"
-                  }}
-                >
-                  {safeRenderLogData(log.payload)}
-                </pre>
-              )}
+  <pre
+    style={{
+      fontSize: "0.75rem",
+      background: "#f8fafc",
+      padding: "4px 6px",
+      borderRadius: 4,
+      marginTop: 4,
+      whiteSpace: "pre-wrap",
+      wordBreak: "break-word"
+    }}
+  >
+    {safeRenderLogData(log.payload)}
+  </pre>
+)}
+
             </li>
           );
         })}
