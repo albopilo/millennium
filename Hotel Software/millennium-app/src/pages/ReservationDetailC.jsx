@@ -155,10 +155,12 @@ export default function ReservationDetailC(props) {
   const lines = baseLines.filter((p) => ((p.accountCode || "") + "").toUpperCase() !== "DEPOSIT");
 
   // Totals (charges exclude DEPOSIT now)
-  const computedChargesTotal =
-    typeof displayChargesTotal === "number"
-      ? displayChargesTotal
-      : lines.reduce((sum, p) => sum + Number(p.amount || 0) + Number(p.tax || 0) + Number(p.service || 0), 0);
+  const finalChargesTotalForBill =
+  lines.reduce(
+    (sum, p) => sum + Number(p.amount || 0) + Number(p.tax || 0) + Number(p.service || 0),
+    0
+  ) + (previewNow.applicable && !hasPersistedEarlyDepartureLines ? previewNow.penalty : 0);
+
 
   // valid payments: exclude void/refunded
   const validPayments = Array.isArray(payments)
@@ -917,8 +919,9 @@ export default function ReservationDetailC(props) {
               {/* Totals */}
               <div style={{ textAlign: "right", marginBottom: 24 }}>
                 <div>
-                  Total Charges: {currency} {fmtMoney(computedChargesTotal + (previewNow.applicable && !hasPersistedEarlyDepartureLines ? previewNow.penalty : 0))}
-                </div>
+  Total Charges: {currency} {fmtMoney(finalChargesTotalForBill)}
+</div>
+
                 <div>
                   Total Payments: {currency} {fmtMoney(computedPaymentsTotal + (previewNow.applicable && !hasPersistedEarlyDepartureLines ? previewNow.refund : 0))}
                 </div>
