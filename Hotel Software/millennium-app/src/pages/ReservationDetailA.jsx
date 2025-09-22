@@ -1552,80 +1552,52 @@ const printCheckInForm = () => {
 
   const actor = log.by || log.actorDisplay || log.actorEmail || "Unknown";
 
-  // Always coerce to string
-  const rawAction =
-    typeof log.action === "string"
-      ? log.action
-      : JSON.stringify(log.action || "");
-  const action = (rawAction || "").replace(/[_-]/g, " ").toUpperCase();
+  // Handle action gracefully
+  let actionText = "";
+  if (typeof log.action === "string") {
+    actionText = log.action;
+  } else if (log.action && typeof log.action === "object") {
+    actionText = log.action.action || JSON.stringify(log.action);
+  }
 
+  actionText = (actionText || "").replace(/[_-]/g, " ").toUpperCase();
+
+  // Payload extraction
   const payload = log.payload || {};
+  let payloadText = "";
+  if (payload.rooms) {
+    payloadText = `Rooms: ${payload.rooms.join(", ")}`;
+  } else if (Object.keys(payload).length > 0) {
+    payloadText = JSON.stringify(payload);
+  }
 
-
-          // Try to craft a human-friendly detail string
-          let detail = "";
-          if (payload.rooms) {
-            detail = `Rooms: ${payload.rooms.join(", ")}`;
-          } else if (payload.reason) {
-            detail = `Reason: ${payload.reason}`;
-          } else if (payload.amount) {
-            detail = `Amount: ${payload.amount}`;
-          }
-
-          return (
-            <div
-              key={log.id}
-              style={{
-                borderLeft: "3px solid #0f172a",
-                padding: "8px 12px",
-                background: "#f9fafb",
-                borderRadius: 4,
-              }}
-            >
-              {/* Action title */}
-              <div style={{ fontWeight: 600, marginBottom: 4 }}>
-                {action || "Activity"}
-              </div>
-
-              {/* Details */}
-              {detail && (
-                <div style={{ fontSize: "0.9rem", marginBottom: 4 }}>
-                  {detail}
-                </div>
-              )}
-
-              {/* Fallback if payload exists but no detail string */}
-              {!detail && Object.keys(payload).length > 0 && (
-                <pre
-                  style={{
-                    fontSize: "0.75rem",
-                    background: "#fff",
-                    padding: "4px 6px",
-                    borderRadius: 4,
-                    margin: "4px 0",
-                    border: "1px solid #e2e8f0",
-                  }}
-                >
-                  {JSON.stringify(payload, null, 2)}
-                </pre>
-              )}
-
-              {/* Timestamp + actor */}
-              <div style={{ fontSize: "0.8rem", color: "#475569" }}>
-                {at.toLocaleString("id-ID", {
-                  day: "2-digit",
-                  month: "short",
-                  year: "numeric",
-                  hour: "2-digit",
-                  minute: "2-digit",
-                })}
-              </div>
-              <div style={{ fontSize: "0.8rem", color: "#64748b" }}>
-                by {actor}
-              </div>
-            </div>
-          );
+  return (
+    <li
+      key={log.id}
+      style={{
+        borderBottom: "1px solid #e2e8f0",
+        padding: "8px 0"
+      }}
+    >
+      <div style={{ fontWeight: 600 }}>{actionText}</div>
+      {payloadText && (
+        <div style={{ fontSize: "0.9rem", color: "#475569", marginTop: 2 }}>
+          {payloadText}
+        </div>
+      )}
+      <div style={{ fontSize: "0.8rem", color: "#64748b", marginTop: 4 }}>
+        {at.toLocaleString("id-ID", {
+          day: "2-digit",
+          month: "short",
+          year: "numeric",
+          hour: "2-digit",
+          minute: "2-digit"
         })}
+      </div>
+      <div style={{ fontSize: "0.8rem", color: "#475569" }}>by {actor}</div>
+    </li>
+  );
+})}
       </div>
     )}
   </div>
