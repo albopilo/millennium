@@ -1550,7 +1550,7 @@ const printCheckInForm = () => {
               <div style={{ fontSize: "0.8rem", color: "#64748b" }}>
                 {at.toLocaleString("id-ID")}
               </div>
-              {log.payload && (
+              {safeRenderLogData(log.payload) && (
   <pre
     style={{
       fontSize: "0.75rem",
