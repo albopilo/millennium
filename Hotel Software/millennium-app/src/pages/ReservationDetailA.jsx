@@ -1544,15 +1544,23 @@ const printCheckInForm = () => {
     ) : (
       <div style={{ display: "grid", gap: 16 }}>
         {logs.map((log) => {
-          const at = log.createdAt?.toDate
-            ? log.createdAt.toDate()
-            : log.at?.toDate
-            ? log.at.toDate()
-            : new Date(log.at || log.createdAt || Date.now());
+  const at = log.createdAt?.toDate
+    ? log.createdAt.toDate()
+    : log.at?.toDate
+    ? log.at.toDate()
+    : new Date(log.at || log.createdAt || Date.now());
 
-          const actor = log.by || log.actorDisplay || log.actorEmail || "Unknown";
-          const action = (log.action || "").replace(/[_-]/g, " ").toUpperCase();
-          const payload = log.payload || {};
+  const actor = log.by || log.actorDisplay || log.actorEmail || "Unknown";
+
+  // Always coerce to string
+  const rawAction =
+    typeof log.action === "string"
+      ? log.action
+      : JSON.stringify(log.action || "");
+  const action = (rawAction || "").replace(/[_-]/g, " ").toUpperCase();
+
+  const payload = log.payload || {};
+
 
           // Try to craft a human-friendly detail string
           let detail = "";
