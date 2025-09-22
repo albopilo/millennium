@@ -1530,64 +1530,89 @@ const printCheckInForm = () => {
       )}
       {/* === Change Log at the bottom (always visible) === */}
 <div className="card" style={{ marginTop: 24 }}>
-  <header className="card-header">
-    <h3>Change Log</h3>
+  <header className="card-header" style={{ borderBottom: "1px solid #e2e8f0", paddingBottom: 8 }}>
+    <h3 style={{ margin: 0 }}>Change Log</h3>
   </header>
-  <div className="card-body">
+  <div className="card-body" style={{ padding: "12px 16px" }}>
     {logs.length === 0 ? (
       <div style={{ fontStyle: "italic", color: "#64748b" }}>
         No changes logged yet.
       </div>
     ) : (
-      <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+      <div style={{ display: "grid", gap: 12 }}>
         {logs.map((log) => {
           const at = log.createdAt?.toDate
             ? log.createdAt.toDate()
             : log.at?.toDate
             ? log.at.toDate()
             : new Date(log.at || log.createdAt || Date.now());
+
+          const actor = log.by || log.actorDisplay || log.actorEmail || "Unknown";
+          const action =
+            typeof log.action === "string" ? log.action : JSON.stringify(log.action);
+          const payload = log.payload || {};
+
           return (
-            <li
+            <div
               key={log.id}
               style={{
-                borderBottom: "1px solid #e2e8f0",
-                padding: "8px 0"
+                border: "1px solid #e2e8f0",
+                borderRadius: 6,
+                padding: "8px 12px",
+                background: "#f9fafb",
               }}
             >
-              <div style={{ fontSize: "0.9rem", marginBottom: 2 }}>
-                <strong>{log.by || log.actorDisplay || log.actorEmail || "Unknown"}</strong>{" "}
-                <span style={{ color: "#475569" }}>
-  {typeof log.action === "string" ? log.action : JSON.stringify(log.action)}
-</span>
-
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  marginBottom: 4,
+                }}
+              >
+                <span style={{ fontWeight: 600 }}>{actor}</span>
+                <span style={{ fontSize: "0.8rem", color: "#64748b" }}>
+                  {at.toLocaleString("id-ID")}
+                </span>
               </div>
-              <div style={{ fontSize: "0.8rem", color: "#64748b" }}>
-                {at.toLocaleString("id-ID")}
+              <div style={{ marginBottom: 4 }}>
+                <span
+                  style={{
+                    display: "inline-block",
+                    background: "#e2e8f0",
+                    color: "#334155",
+                    fontSize: "0.8rem",
+                    fontWeight: 500,
+                    padding: "2px 6px",
+                    borderRadius: 4,
+                  }}
+                >
+                  {action}
+                </span>
               </div>
-              {safeRenderLogData(log.payload) && (
-  <pre
-    style={{
-      fontSize: "0.75rem",
-      background: "#f8fafc",
-      padding: "4px 6px",
-      borderRadius: 4,
-      marginTop: 4,
-      whiteSpace: "pre-wrap",
-      wordBreak: "break-word"
-    }}
-  >
-    {safeRenderLogData(log.payload)}
-  </pre>
-)}
-
-            </li>
+              {Object.keys(payload).length > 0 && (
+                <pre
+                  style={{
+                    fontSize: "0.8rem",
+                    background: "#fff",
+                    padding: "6px 8px",
+                    borderRadius: 4,
+                    margin: 0,
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                    border: "1px solid #e2e8f0",
+                  }}
+                >
+                  {JSON.stringify(payload, null, 2)}
+                </pre>
+              )}
+            </div>
           );
         })}
-      </ul>
+      </div>
     )}
   </div>
 </div>
-
     </div>
   );
 }
