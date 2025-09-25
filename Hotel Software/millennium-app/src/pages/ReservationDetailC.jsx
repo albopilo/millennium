@@ -151,19 +151,16 @@ export default function ReservationDetailC(props) {
             ((p.accountCode || "") + "").toUpperCase() !== "PAY"
         );
 
-  // IMPORTANT: exclude DEPOSIT from "charges" — deposits are not revenue
-  const lines = baseLines.filter((p) => ((p.accountCode || "") + "").toUpperCase() !== "DEPOSIT");
-  // preview based on "if checkout now"
-  const previewNow = computeEarlyDeparturePreview({ actualCheckoutDate: new Date() });
-  // Totals (charges exclude DEPOSIT now)
-  const finalChargesTotalForBill =
-  lines.reduce(
-    (sum, p) => sum + Number(p.amount || 0) + Number(p.tax || 0) + Number(p.service || 0),
-    0
-  ) + (previewNow.applicable && !hasPersistedEarlyDepartureLines ? previewNow.penalty : 0);
+  // NOTE: For printing we want to avoid double-counting ROOM postings (we render rooms via roomChargeDetails).
+  // So exclude DEPOSIT and ROOM from "lines" used for generic charges listing.
+  const lines = baseLines.filter(
+    (p) => {
+      const ac = ((p.accountCode || "") + "").toUpperCase();
+      return ac !== "DEPOSIT" && ac !== "ROOM";
+    }
+  );
 
-
-  // valid payments: exclude void/refunded
+  // compute payments (valid)
   const validPayments = Array.isArray(payments)
     ? payments.filter((p) => {
         const st = ((p.status || "") + "").toLowerCase();
@@ -245,44 +242,11 @@ export default function ReservationDetailC(props) {
     0
   );
 
-  // final combined charges total (excludes deposits)
-  const finalChargesTotal = roomChargesTotal + otherChargesTotal;
+  // computed charges (exclude deposits and room postings — room totals come from roomChargeDetails)
+  const computedChargesTotal = roomChargesTotal + otherChargesTotal;
 
-  // Balance (assume deposit returned at checkout, so subtract it)
-  const computedBalance =
-    typeof displayBalance === "number"
-      ? displayBalance
-      : finalChargesTotalForBill - computedPaymentsTotal - computedDepositTotal;
-
-  // Helper to normalize payment method strings into canonical types used by the template
-  function mapMethodToType(method) {
-    if (!method) return "Other";
-    const m = (method + "").toLowerCase();
-    if (m.includes("cash")) return "Cash";
-    if (m.includes("qris") || m.includes("qr") || m.includes("qrcode")) return "QRIS";
-    if (m.includes("ota")) return "OTA";
-    if (m.includes("debit")) return "Debit";
-    if (m.includes("credit")) return "Credit";
-    if (m.includes("card")) return "Credit";
-    if (m.includes("bank") || m.includes("transfer") || m.includes("va")) return "Bank";
-    return "Other";
-  }
-
-  // Compute paymentsByType in a robust way by mapping each payment to a canonical label
-  const paymentsByType = {};
-  const typesList = Array.isArray(templateConfig.paymentTypes)
-    ? templateConfig.paymentTypes.slice()
-    : ["Cash", "QRIS", "OTA", "Debit", "Credit"];
-
-  // initialize
-  for (const t of typesList) paymentsByType[t] = 0;
-  paymentsByType["Other"] = paymentsByType["Other"] || 0;
-
-  for (const p of validPayments) {
-    const t = mapMethodToType(p.method || p.type || "");
-    if (!paymentsByType[t] && typesList.indexOf(t) === -1) paymentsByType[t] = 0;
-    paymentsByType[t] = (paymentsByType[t] || 0) + Number(p.amount || 0);
-  }
+  // final combined charges total (same as computedChargesTotal here; kept for clarity)
+  const finalChargesTotal = computedChargesTotal;
 
   // -------------------------
   // Early departure preview
@@ -344,10 +308,49 @@ export default function ReservationDetailC(props) {
     };
   }
 
+  // preview based on "if checkout now"
+  const previewNow = computeEarlyDeparturePreview({ actualCheckoutDate: new Date() });
+
+  // final charges used for printing the bill (include preview penalty if applicable and not persisted)
+  const finalChargesTotalForBill = computedChargesTotal + (previewNow.applicable && !hasPersistedEarlyDepartureLines ? previewNow.penalty : 0);
+
   // compute adjusted totals (UI-only preview)
-  const finalChargesTotalForBillAdjusted = finalChargesTotalForBill + (previewNow.penalty || 0);
-  const computedPaymentsTotalAdjusted = computedPaymentsTotal + (previewNow.refund || 0);
+  const computedPaymentsTotalAdjusted = computedPaymentsTotal + (previewNow.applicable && !hasPersistedEarlyDepartureLines ? previewNow.refund : 0);
+  const computedBalance =
+    typeof displayBalance === "number"
+      ? displayBalance
+      : computedChargesTotal - computedPaymentsTotal - computedDepositTotal;
   const computedBalanceAdjusted = (computedBalance || 0) + (previewNow.penalty || 0) - (previewNow.refund || 0);
+
+  // Helper to normalize payment method strings into canonical types used by the template
+  function mapMethodToType(method) {
+    if (!method) return "Other";
+    const m = (method + "").toLowerCase();
+    if (m.includes("cash")) return "Cash";
+    if (m.includes("qris") || m.includes("qr") || m.includes("qrcode")) return "QRIS";
+    if (m.includes("ota")) return "OTA";
+    if (m.includes("debit")) return "Debit";
+    if (m.includes("credit")) return "Credit";
+    if (m.includes("card")) return "Credit";
+    if (m.includes("bank") || m.includes("transfer") || m.includes("va")) return "Bank";
+    return "Other";
+  }
+
+  // Compute paymentsByType in a robust way by mapping each payment to a canonical label
+  const paymentsByType = {};
+  const typesList = Array.isArray(templateConfig.paymentTypes)
+    ? templateConfig.paymentTypes.slice()
+    : ["Cash", "QRIS", "OTA", "Debit", "Credit"];
+
+  // initialize
+  for (const t of typesList) paymentsByType[t] = 0;
+  paymentsByType["Other"] = paymentsByType["Other"] || 0;
+
+  for (const p of validPayments) {
+    const t = mapMethodToType(p.method || p.type || "");
+    if (!paymentsByType[t] && typesList.indexOf(t) === -1) paymentsByType[t] = 0;
+    paymentsByType[t] = (paymentsByType[t] || 0) + Number(p.amount || 0);
+  }
 
   // action wrappers that also call the logging callback (logger should be provided by ReservationDetailB.jsx)
   const handleSubmitCharge = async () => {
@@ -429,7 +432,7 @@ export default function ReservationDetailC(props) {
           }
         } catch (err) {
           console.error("applyEarlyDepartureAdjustments failed:", err);
-          // Continue to attempt checkout even if the optional persistence failed (you can change this)
+          // Continue to attempt checkout even if the optional persistence failed
         }
       }
 
@@ -473,26 +476,41 @@ export default function ReservationDetailC(props) {
         </div>
 
         <div className="folio-lines">
-          {lines.length === 0 ? (
+          {lines.length === 0 && roomChargeDetails.length === 0 ? (
             <div className="folio-empty">No charges yet.</div>
           ) : (
-            lines.map((p) => (
-              <div key={p.id || `${p.description}-${Math.random()}`} className="folio-line">
-                <div className="f-desc">{p.description || "-"}</div>
-                <div className="f-account">{p.accountCode || "-"}</div>
-                <div className="f-status">{p.status || "-"}</div>
-                <div className="f-amount">
-                  {currency} {fmtMoney(Number(p.amount || 0) + Number(p.tax || 0) + Number(p.service || 0))}
+            <>
+              {/* show room charges from computed roomChargeDetails */}
+              {roomChargeDetails.map((r, i) => (
+                <div key={`room-${r.roomNo}-${i}`} className="folio-line">
+                  <div className="f-desc">Room {r.roomNo} ({r.roomType})</div>
+                  <div className="f-account">ROOM</div>
+                  <div className="f-status">posted</div>
+                  <div className="f-amount">
+                    {currency} {fmtMoney(Number(r.subtotal || 0))}
+                  </div>
                 </div>
-              </div>
-            ))
+              ))}
+
+              {/* show other charge postings (non-room, non-deposit) */}
+              {otherChargePostings.map((p) => (
+                <div key={p.id || `${p.description}-${Math.random()}`} className="folio-line">
+                  <div className="f-desc">{p.description || "-"}</div>
+                  <div className="f-account">{p.accountCode || "-"}</div>
+                  <div className="f-status">{p.status || "-"}</div>
+                  <div className="f-amount">
+                    {currency} {fmtMoney(Number(p.amount || 0) + Number(p.tax || 0) + Number(p.service || 0))}
+                  </div>
+                </div>
+              ))}
+            </>
           )}
         </div>
 
         <div className="folio-totals">
           <div className="tot-row">
             <div className="t-label">Charges</div>
-            <div className="t-value">{currency} {fmtMoney(finalChargesTotalForBill)}</div>
+            <div className="t-value">{currency} {fmtMoney(computedChargesTotal)}</div>
           </div>
           <div className="tot-row">
             <div className="t-label">Payments</div>
@@ -800,7 +818,6 @@ export default function ReservationDetailC(props) {
                     </>
                   )}
 
-
                   {/* Deposit Row */}
                   {computedDepositTotal > 0 && (
                     <tr>
@@ -857,38 +874,51 @@ export default function ReservationDetailC(props) {
                   </tr>
                 </thead>
                 <tbody>
-                    
-                    {lines
-      .filter((p) => ((p.accountCode || "").toUpperCase() !== "DEPOSIT")) // 🚫 exclude deposits
-      .map((p, idx) => (
-        <tr key={p.id || idx}>
-          <td>{p.description}</td>
-          <td style={{ textAlign: "right" }}>
-            {currency} {fmtMoney(Number(p.amount || 0) + Number(p.tax || 0) + Number(p.service || 0))}
-          </td>
-        </tr>
-      ))}
+                    {/* show room charges first (prevent double printing) */}
+                    {roomChargeDetails.map((r, i) => (
+                      <tr key={`roomc-${i}`}>
+                        <td>{`Room ${r.roomNo} (${r.roomType})`}</td>
+                        <td style={{ textAlign: "right" }}>
+                          {currency} {fmtMoney(r.subtotal)}
+                        </td>
+                      </tr>
+                    ))}
 
-    {/* Early departure adjustments */}
-    {(() => {
-      if (!hasPersistedEarlyDepartureLines && previewNow.applicable) {
-        return (
-          <>
-            <tr>
-              <td>Early departure penalty</td>
-              <td style={{ textAlign: "right" }}>{currency} {fmtMoney(previewNow.penalty)}</td>
-            </tr>
-            <tr>
-              <td>Early departure refund</td>
-              <td style={{ textAlign: "right" }}>-{currency} {fmtMoney(previewNow.refund)}</td>
-            </tr>
-          </>
-        );
-      }
-      return null;
-    })()}
-  </tbody>
-</table>
+                    {/* other non-room charges (already filtered) */}
+                    {otherChargePostings.map((p, idx) => (
+                      <tr key={p.id || idx}>
+                        <td>{p.description}</td>
+                        <td style={{ textAlign: "right" }}>
+                          {currency}{" "}
+                          {fmtMoney(
+                            Number(p.amount || 0) +
+                              Number(p.tax || 0) +
+                              Number(p.service || 0)
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+
+                    {/* Print preview of early-departure adjustments if present (either persisted or computed preview) */}
+                    {(() => {
+                      if (!hasPersistedEarlyDepartureLines && previewNow.applicable) {
+                        return (
+                          <>
+                            <tr>
+                              <td>Early departure penalty</td>
+                              <td style={{ textAlign: "right" }}>{currency} {fmtMoney(previewNow.penalty)}</td>
+                            </tr>
+                            <tr>
+                              <td>Early departure refund</td>
+                              <td style={{ textAlign: "right" }}>-{currency} {fmtMoney(previewNow.refund)}</td>
+                            </tr>
+                          </>
+                        );
+                      }
+                      return null;
+                    })()}
+                  </tbody>
+              </table>
 
               {/* Payments Table */}
               {validPayments.length > 0 && (
@@ -917,11 +947,11 @@ export default function ReservationDetailC(props) {
               {/* Totals */}
               <div style={{ textAlign: "right", marginBottom: 24 }}>
                 <div>
-  Total Charges: {currency} {fmtMoney(finalChargesTotalForBill)}
-</div>
+                  Total Charges: {currency} {fmtMoney(finalChargesTotalForBill)}
+                </div>
 
                 <div>
-                  Total Payments: {currency} {fmtMoney(computedPaymentsTotal + (previewNow.applicable && !hasPersistedEarlyDepartureLines ? previewNow.refund : 0))}
+                  Total Payments: {currency} {fmtMoney(computedPaymentsTotalAdjusted)}
                 </div>
                 <div>
                   Total Deposit: {currency} {fmtMoney(computedDepositTotal)}
