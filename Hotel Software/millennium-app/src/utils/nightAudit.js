@@ -59,11 +59,10 @@ function businessDayForRunTime(runDate = null, tzOffset = 7) {
  */
 export async function runNightAudit({ runBy = "system", finalize = false, tzOffset = 7 } = {}) {
   const runAt = nowInTZ(tzOffset);
-  const businessDay = businessDayForRunTime(runAt, tzOffset); // Date at midnight (tz)
-  const businessDayStr = businessDay.toISOString().slice(0, 10); // YYYY-MM-DD
+  const businessDay = businessDayForRunTime(runAt, tzOffset);
+  const businessDayStr = businessDay.toISOString().slice(0, 10);
 
-  const issues = [];
-  // Summary counters
+  let issues = []; // collect first
   let roomsTotal = 0;
   let roomsOccupied = 0;
   let totalRoomRevenue = 0;
@@ -224,49 +223,55 @@ export async function runNightAudit({ runBy = "system", finalize = false, tzOffs
       }
     }
 
+    
+    // 🔑 STEP: After collecting issues, load noticed ones
+    const noticedSnap = await getDocs(
+      query(collection(db, "nightAuditIssues"), where("noticed", "==", true))
+    );
+    const noticedKeys = new Set(noticedSnap.docs.map(d => d.id));
+
+    // filter
+    const newIssues = issues.filter(issue => {
+      const key = `${issue.type}:${issue.reservationId || issue.stayId || issue.roomNumber || "?"}`;
+      issue.issueKey = key;
+      return !noticedKeys.has(key);
+    });
+
     // Build summary
     const occupancyPct = roomsTotal > 0 ? (roomsOccupied / roomsTotal) * 100 : 0;
     const adr = roomsOccupied > 0 ? Math.round(totalRoomRevenue / roomsOccupied) : 0;
     const revpar = roomsTotal > 0 ? Math.round(totalRoomRevenue / roomsTotal) : 0;
 
+    // Build summary
     const summary = {
       runAt: runAt.toISOString(),
       businessDay: businessDayStr,
       roomsTotal,
       roomsOccupied,
-      occupancyPct: Math.round(occupancyPct * 100) / 100,
-      adr,
-      revpar,
+      occupancyPct: roomsTotal > 0 ? Math.round((roomsOccupied / roomsTotal) * 10000) / 100 : 0,
+      adr: roomsOccupied > 0 ? Math.round(totalRoomRevenue / roomsOccupied) : 0,
+      revpar: roomsTotal > 0 ? Math.round(totalRoomRevenue / roomsTotal) : 0,
       totalRoomRevenue: Math.round(totalRoomRevenue),
       channelCounts,
       roomTypeCounts,
-      issuesCount: issues.length,
+      issuesCount: newIssues.length,
     };
 
-    // If finalize: write snapshot and log
     if (finalize) {
-      // We'll write deterministic doc id using businessDay string so audit for a day is single doc
-      const logRef = doc(db, "nightAuditLogs", `${businessDayStr}`);
-      const payload = {
-        runAt: new Date(), // serverTimestamp not allowed in setDoc merge w/o server side? we use serverTimestamp in set below
+      const batch = writeBatch(db);
+
+      // nightAuditLogs (summary + visible issues)
+      batch.set(doc(db, "nightAuditLogs", businessDayStr), {
+        runAt: new Date(),
         runBy,
         businessDay: businessDayStr,
         summary,
-        issues,
-      };
-
-      // Use batch: write audit log + optionally snapshot collections (lightweight snapshot: counts + ids)
-      const batch = writeBatch(db);
-
-      // Set log doc with server timestamp
-      batch.set(logRef, {
-        ...payload,
-        createdAt: serverTimestamp()
+        issues: newIssues,
+        createdAt: serverTimestamp(),
       });
 
-      // Optionally write small snapshot doc (not full data to avoid big writes)
-      const snapshotRef = doc(db, "nightAuditSnapshots", `${businessDayStr}`);
-      batch.set(snapshotRef, {
+      // snapshot
+      batch.set(doc(db, "nightAuditSnapshots", businessDayStr), {
         roomsTotal,
         roomsOccupied,
         totalReservations: reservations.length,
@@ -276,12 +281,22 @@ export async function runNightAudit({ runBy = "system", finalize = false, tzOffs
         createdAt: serverTimestamp(),
       });
 
+      // persist each issue
+      for (const issue of newIssues) {
+        batch.set(doc(db, "nightAuditIssues", issue.issueKey), {
+          ...issue,
+          businessDay: businessDayStr,
+          noticed: false,
+          createdAt: serverTimestamp(),
+        }, { merge: true });
+      }
+
       await batch.commit();
     }
 
-    return { success: true, issues, summary };
+    return { success: true, issues: newIssues, summary };
   } catch (err) {
     console.error("runNightAudit error:", err);
-    return { success: false, error: err.message || String(err), issues, summary: null };
+    return { success: false, error: err.message || String(err), issues: [], summary: null };
   }
 }
