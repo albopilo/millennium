@@ -257,11 +257,56 @@ export async function runNightAudit({ runBy = "system", finalize = false, tzOffs
       issuesCount: newIssues.length,
     };
 
-    if (finalize) {
-      const batch = writeBatch(db);
+    // --- put this inside your runNightAudit where your finalize block is ---
 
-      // nightAuditLogs (summary + visible issues)
-      batch.set(doc(db, "nightAuditLogs", businessDayStr), {
+if (finalize) {
+  // Prepare the writes
+  const logRef = doc(db, "nightAuditLogs", businessDayStr);
+  const snapshotRef = doc(db, "nightAuditSnapshots", businessDayStr);
+  const issueWrites = newIssues.map(issue => ({
+    ref: doc(db, "nightAuditIssues", issue.issueKey),
+    data: {
+      ...issue,
+      businessDay: businessDayStr,
+      noticed: false,
+      createdAt: serverTimestamp()
+    }
+  }));
+
+  // Try batch first (fast)
+  try {
+    const batch = writeBatch(db);
+    batch.set(logRef, {
+      runAt: new Date(),
+      runBy,
+      businessDay: businessDayStr,
+      summary,
+      issues: newIssues,
+      createdAt: serverTimestamp(),
+    });
+    batch.set(snapshotRef, {
+      roomsTotal,
+      roomsOccupied,
+      totalReservations: reservations.length,
+      totalStays: stays.length,
+      totalPostings: postings.length,
+      totalPayments: payments.length,
+      createdAt: serverTimestamp(),
+    });
+    for (const w of issueWrites) {
+      // NOTE: using set(..., { merge: true }) in your original — keep as needed.
+      // If you prefer to always create new issue docs use set(w.ref, w.data) (no merge)
+      batch.set(w.ref, w.data, { merge: true });
+    }
+    await batch.commit();
+  } catch (batchErr) {
+    // Batch failed — log and try to isolate which specific write fails
+    console.error("runNightAudit batch.commit failed:", batchErr);
+
+    // Try writes one-by-one to find offending write (this will surface whether
+    // nightAuditLogs, nightAuditSnapshots, or one of the issues is blocked).
+    try {
+      await setDoc(logRef, {
         runAt: new Date(),
         runBy,
         businessDay: businessDayStr,
@@ -269,9 +314,13 @@ export async function runNightAudit({ runBy = "system", finalize = false, tzOffs
         issues: newIssues,
         createdAt: serverTimestamp(),
       });
+    } catch (err) {
+      console.error("Failed to write nightAuditLogs:", err);
+      throw err; // rethrow so caller sees permission problem
+    }
 
-      // snapshot
-      batch.set(doc(db, "nightAuditSnapshots", businessDayStr), {
+    try {
+      await setDoc(snapshotRef, {
         roomsTotal,
         roomsOccupied,
         totalReservations: reservations.length,
@@ -280,23 +329,19 @@ export async function runNightAudit({ runBy = "system", finalize = false, tzOffs
         totalPayments: payments.length,
         createdAt: serverTimestamp(),
       });
-
-      // persist each issue
-      for (const issue of newIssues) {
-        batch.set(doc(db, "nightAuditIssues", issue.issueKey), {
-          ...issue,
-          businessDay: businessDayStr,
-          noticed: false,
-          createdAt: serverTimestamp(),
-        }, { merge: true });
-      }
-
-      await batch.commit();
+    } catch (err) {
+      console.error("Failed to write nightAuditSnapshots:", err);
+      throw err;
     }
 
-    return { success: true, issues: newIssues, summary };
-  } catch (err) {
-    console.error("runNightAudit error:", err);
-    return { success: false, error: err.message || String(err), issues: [], summary: null };
+    // persist each issue individually (merge=true to preserve harmless merging)
+    for (const w of issueWrites) {
+      try {
+        await setDoc(w.ref, w.data, { merge: true });
+      } catch (err) {
+        console.error("Failed to write nightAuditIssues for key:", w.ref.id, err);
+        throw err;
+      }
+    }
   }
 }
