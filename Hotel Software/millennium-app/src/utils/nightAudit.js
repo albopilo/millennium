@@ -4,10 +4,8 @@ import {
   query,
   where,
   getDocs,
-  addDoc,
   setDoc,
   doc,
-  getDoc,
   serverTimestamp,
   writeBatch,
 } from "firebase/firestore";
@@ -17,9 +15,7 @@ import { db } from "../firebase";
  * Helpers for Jakarta timezone (GMT+7)
  */
 function nowInTZ(offsetHours = 7) {
-  // returns Date object currently in target timezone
   const now = new Date();
-  // get UTC ms, add offset
   const utcMs = now.getTime() + now.getTimezoneOffset() * 60000;
   const tzMs = utcMs + offsetHours * 3600 * 1000;
   return new Date(tzMs);
@@ -33,15 +29,11 @@ function startOfDayInTZ(d) {
 
 /**
  * Determine business-day date (in timezone) for the audit run.
- * Business day is considered current date at hotel timezone (GMT+7).
- * "End of day" is 04:00 local time; this utility returns the "business day" that is being closed.
  */
 function businessDayForRunTime(runDate = null, tzOffset = 7) {
   const now = runDate ? new Date(runDate) : nowInTZ(tzOffset);
-  // If it's between 00:00 - 03:59 local time, it's still the previous business day for closing purposes
   const hours = now.getHours();
   if (hours < 4) {
-    // previous day
     const prev = new Date(now);
     prev.setDate(prev.getDate() - 1);
     return startOfDayInTZ(prev);
@@ -51,18 +43,13 @@ function businessDayForRunTime(runDate = null, tzOffset = 7) {
 
 /**
  * runNightAudit
- * - performs checks across reservations, stays, postings, payments, rooms
- * - returns { issues: [ ... ], summary: { ... } }
- * - optionally writes to nightAuditLogs if finalise === true
- *
- * WARNING: this is "best-effort" aggregator — adapt to other domain specifics
  */
 export async function runNightAudit({ runBy = "system", finalize = false, tzOffset = 7 } = {}) {
   const runAt = nowInTZ(tzOffset);
   const businessDay = businessDayForRunTime(runAt, tzOffset);
   const businessDayStr = businessDay.toISOString().slice(0, 10);
 
-  let issues = []; // collect first
+  let issues = [];
   let roomsTotal = 0;
   let roomsOccupied = 0;
   let totalRoomRevenue = 0;
@@ -76,7 +63,7 @@ export async function runNightAudit({ runBy = "system", finalize = false, tzOffs
     roomsTotal = rooms.length;
     roomsOccupied = rooms.filter((r) => (r.status || "").toLowerCase() === "occupied").length;
 
-    // Reservations: all active reservations (booked, checked-in)
+    // Reservations
     const resQ = query(
       collection(db, "reservations"),
       where("status", "in", ["booked", "checked-in", "checked-out", "cancelled"])
@@ -84,18 +71,18 @@ export async function runNightAudit({ runBy = "system", finalize = false, tzOffs
     const resSnap = await getDocs(resQ);
     const reservations = resSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
 
-    // Stays: active stays (open)
+    // Stays
     const stayQ = query(collection(db, "stays"));
     const staySnap = await getDocs(stayQ);
     const stays = staySnap.docs.map((d) => ({ id: d.id, ...d.data() }));
 
-    // Postings & payments (all for the business day)
+    // Postings & payments
     const postingSnap = await getDocs(collection(db, "postings"));
     const postings = postingSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
     const paymentSnap = await getDocs(collection(db, "payments"));
     const payments = paymentSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
 
-    // 1) Ensure every open stay links to a reservation
+    // 1) Stays must link to reservation
     for (const s of stays.filter((x) => (x.status || "").toLowerCase() === "open")) {
       if (!s.reservationId) {
         issues.push({
@@ -104,7 +91,6 @@ export async function runNightAudit({ runBy = "system", finalize = false, tzOffs
           stayId: s.id,
         });
       } else {
-        // verify reservation exists
         const resExists = reservations.some((r) => r.id === s.reservationId);
         if (!resExists) {
           issues.push({
@@ -117,21 +103,23 @@ export async function runNightAudit({ runBy = "system", finalize = false, tzOffs
       }
     }
 
-    // 2) In-house date checks: no in-house (checked-in / stay open) should have checkOutDate < businessDay
+    // 2) Stays past checkout
     for (const s of stays.filter((x) => (x.status || "").toLowerCase() === "open")) {
       const rId = s.reservationId;
-      // find reservation
       const res = reservations.find((rr) => rr.id === rId);
-      const checkOut = res?.checkOutDate ? (res.checkOutDate?.toDate ? res.checkOutDate.toDate() : new Date(res.checkOutDate)) : null;
+      const checkOut = res?.checkOutDate
+        ? res.checkOutDate?.toDate
+          ? res.checkOutDate.toDate()
+          : new Date(res.checkOutDate)
+        : null;
       if (checkOut) {
-        // If checkOut date is strictly before start of businessDay -> problem
         if (checkOut < businessDay) {
           issues.push({
             type: "stay_past_checkout",
-            message: `Stay ${s.id} in room ${s.roomNumber} has check-out ${checkOut.toISOString().slice(0,10)} < business day ${businessDayStr}`,
+            message: `Stay ${s.id} in room ${s.roomNumber} has check-out ${checkOut.toISOString().slice(0, 10)} < business day ${businessDayStr}`,
             stayId: s.id,
             reservationId: rId,
-            checkOut
+            checkOut,
           });
         }
       } else {
@@ -139,28 +127,32 @@ export async function runNightAudit({ runBy = "system", finalize = false, tzOffs
           type: "stay_missing_checkout",
           message: `Stay ${s.id} in room ${s.roomNumber} has no check-out date on reservation ${rId}`,
           stayId: s.id,
-          reservationId: rId
+          reservationId: rId,
         });
       }
     }
 
-    // 3) Reservation checked-in but checkInDate < businessDay (violates check-in after previous date rule)
+    // 3) Reservations checked-in with old check-in date
     for (const r of reservations.filter((x) => (x.status || "").toLowerCase() === "checked-in")) {
-      const inDate = r.checkInDate ? (r.checkInDate?.toDate ? r.checkInDate.toDate() : new Date(r.checkInDate)) : null;
+      const inDate = r.checkInDate
+        ? r.checkInDate?.toDate
+          ? r.checkInDate.toDate()
+          : new Date(r.checkInDate)
+        : null;
       if (inDate && inDate < businessDay) {
         issues.push({
           type: "checked_in_with_past_checkin",
-          message: `Reservation ${r.id} is checked-in but has check-in ${inDate.toISOString().slice(0,10)} < business day ${businessDayStr}`,
-          reservationId: r.id
+          message: `Reservation ${r.id} is checked-in but has check-in ${inDate.toISOString().slice(0, 10)} < business day ${businessDayStr}`,
+          reservationId: r.id,
         });
       }
     }
 
-    // 4) Postings vs payments reconciliation per reservation
-    // We'll compute for reservations with any postings/payments today or open stays
+    // 4) Reconcile postings & payments
     const resMap = new Map(reservations.map((r) => [r.id, r]));
     const postingsByRes = {};
     const paymentsByRes = {};
+
     for (const p of postings) {
       if (!p.reservationId) continue;
       postingsByRes[p.reservationId] = postingsByRes[p.reservationId] || [];
@@ -175,22 +167,26 @@ export async function runNightAudit({ runBy = "system", finalize = false, tzOffs
     for (const [resId, r] of resMap) {
       const posts = postingsByRes[resId] || [];
       const pays = paymentsByRes[resId] || [];
-      const postsTotal = posts.reduce((s, x) => s + Number(x.amount || 0) + Number(x.tax || 0) + Number(x.service || 0), 0);
+      const postsTotal = posts.reduce(
+        (s, x) => s + Number(x.amount || 0) + Number(x.tax || 0) + Number(x.service || 0),
+        0
+      );
       const paysTotal = pays.reduce((s, x) => s + Number(x.amount || 0), 0);
-      // detect a discrepancy bigger than small rounding tolerance
+
       if (Math.abs(postsTotal - paysTotal) > 0.5 && (postsTotal > 0 || paysTotal > 0)) {
         issues.push({
           type: "payments_mismatch",
           message: `Reservation ${resId} postings ${postsTotal} != payments ${paysTotal}`,
           reservationId: resId,
           postingsTotal: postsTotal,
-          paymentsTotal: paysTotal
+          paymentsTotal: paysTotal,
         });
       }
+
       totalRoomRevenue += postsTotal;
-      // channel & roomType counters
       const ch = (r.channel || "direct").toLowerCase();
       channelCounts[ch] = (channelCounts[ch] || 0) + 1;
+
       const firstRoom = Array.isArray(r.roomNumbers) ? (r.roomNumbers[0] || null) : r.roomNumber;
       if (firstRoom) {
         const roomDoc = rooms.find((rr) => rr.roomNumber === firstRoom);
@@ -199,50 +195,48 @@ export async function runNightAudit({ runBy = "system", finalize = false, tzOffs
       }
     }
 
-    // 5) No-shows: reservations with checkInDate < businessDay and not checked-in and status booked => possible no-show
+    // 5) No-shows
     for (const r of reservations.filter((x) => (x.status || "").toLowerCase() === "booked")) {
-      const inDate = r.checkInDate ? (r.checkInDate?.toDate ? r.checkInDate.toDate() : new Date(r.checkInDate)) : null;
+      const inDate = r.checkInDate
+        ? r.checkInDate?.toDate
+          ? r.checkInDate.toDate()
+          : new Date(r.checkInDate)
+        : null;
       if (inDate && inDate < businessDay) {
         issues.push({
           type: "possible_noshow",
-          message: `Reservation ${r.id} with check-in ${inDate.toISOString().slice(0,10)} is still booked (past business day). Mark as no-show?`,
-          reservationId: r.id
+          message: `Reservation ${r.id} with check-in ${inDate.toISOString().slice(0, 10)} is still booked (past business day).`,
+          reservationId: r.id,
         });
       }
     }
 
-    // 6) Rooms status sanity: rooms with status 'Occupied' but no open stay pointing at them
+    // 6) Rooms occupied but no stay
     for (const r of rooms.filter((x) => (x.status || "").toLowerCase() === "occupied")) {
-      const hasOpenStay = stays.some((s) => (s.roomNumber == r.roomNumber) && (s.status || "").toLowerCase() === "open");
+      const hasOpenStay = stays.some(
+        (s) => s.roomNumber === r.roomNumber && (s.status || "").toLowerCase() === "open"
+      );
       if (!hasOpenStay) {
         issues.push({
           type: "room_occupied_without_stay",
           message: `Room ${r.roomNumber} shows Occupied but no open stay found.`,
-          roomNumber: r.roomNumber
+          roomNumber: r.roomNumber,
         });
       }
     }
 
-    
-    // 🔑 STEP: After collecting issues, load noticed ones
+    // Load already noticed issues
     const noticedSnap = await getDocs(
       query(collection(db, "nightAuditIssues"), where("noticed", "==", true))
     );
-    const noticedKeys = new Set(noticedSnap.docs.map(d => d.id));
+    const noticedKeys = new Set(noticedSnap.docs.map((d) => d.id));
 
-    // filter
-    const newIssues = issues.filter(issue => {
+    const newIssues = issues.filter((issue) => {
       const key = `${issue.type}:${issue.reservationId || issue.stayId || issue.roomNumber || "?"}`;
       issue.issueKey = key;
       return !noticedKeys.has(key);
     });
 
-    // Build summary
-    const occupancyPct = roomsTotal > 0 ? (roomsOccupied / roomsTotal) * 100 : 0;
-    const adr = roomsOccupied > 0 ? Math.round(totalRoomRevenue / roomsOccupied) : 0;
-    const revpar = roomsTotal > 0 ? Math.round(totalRoomRevenue / roomsTotal) : 0;
-
-    // Build summary
     const summary = {
       runAt: runAt.toISOString(),
       businessDay: businessDayStr,
@@ -257,91 +251,73 @@ export async function runNightAudit({ runBy = "system", finalize = false, tzOffs
       issuesCount: newIssues.length,
     };
 
-    // --- put this inside your runNightAudit where your finalize block is ---
+    if (finalize) {
+      const logRef = doc(db, "nightAuditLogs", businessDayStr);
+      const snapshotRef = doc(db, "nightAuditSnapshots", businessDayStr);
+      const issueWrites = newIssues.map((issue) => ({
+        ref: doc(db, "nightAuditIssues", issue.issueKey),
+        data: {
+          ...issue,
+          businessDay: businessDayStr,
+          noticed: false,
+          createdAt: serverTimestamp(),
+        },
+      }));
 
-if (finalize) {
-  // Prepare the writes
-  const logRef = doc(db, "nightAuditLogs", businessDayStr);
-  const snapshotRef = doc(db, "nightAuditSnapshots", businessDayStr);
-  const issueWrites = newIssues.map(issue => ({
-    ref: doc(db, "nightAuditIssues", issue.issueKey),
-    data: {
-      ...issue,
-      businessDay: businessDayStr,
-      noticed: false,
-      createdAt: serverTimestamp()
-    }
-  }));
-
-  // Try batch first (fast)
-  try {
-    const batch = writeBatch(db);
-    batch.set(logRef, {
-      runAt: new Date(),
-      runBy,
-      businessDay: businessDayStr,
-      summary,
-      issues: newIssues,
-      createdAt: serverTimestamp(),
-    });
-    batch.set(snapshotRef, {
-      roomsTotal,
-      roomsOccupied,
-      totalReservations: reservations.length,
-      totalStays: stays.length,
-      totalPostings: postings.length,
-      totalPayments: payments.length,
-      createdAt: serverTimestamp(),
-    });
-    for (const w of issueWrites) {
-      // NOTE: using set(..., { merge: true }) in your original — keep as needed.
-      // If you prefer to always create new issue docs use set(w.ref, w.data) (no merge)
-      batch.set(w.ref, w.data, { merge: true });
-    }
-    await batch.commit();
-  } catch (batchErr) {
-    // Batch failed — log and try to isolate which specific write fails
-    console.error("runNightAudit batch.commit failed:", batchErr);
-
-    // Try writes one-by-one to find offending write (this will surface whether
-    // nightAuditLogs, nightAuditSnapshots, or one of the issues is blocked).
-    try {
-      await setDoc(logRef, {
-        runAt: new Date(),
-        runBy,
-        businessDay: businessDayStr,
-        summary,
-        issues: newIssues,
-        createdAt: serverTimestamp(),
-      });
-    } catch (err) {
-      console.error("Failed to write nightAuditLogs:", err);
-      throw err; // rethrow so caller sees permission problem
-    }
-
-    try {
-      await setDoc(snapshotRef, {
-        roomsTotal,
-        roomsOccupied,
-        totalReservations: reservations.length,
-        totalStays: stays.length,
-        totalPostings: postings.length,
-        totalPayments: payments.length,
-        createdAt: serverTimestamp(),
-      });
-    } catch (err) {
-      console.error("Failed to write nightAuditSnapshots:", err);
-      throw err;
-    }
-
-    // persist each issue individually (merge=true to preserve harmless merging)
-    for (const w of issueWrites) {
       try {
-        await setDoc(w.ref, w.data, { merge: true });
-      } catch (err) {
-        console.error("Failed to write nightAuditIssues for key:", w.ref.id, err);
-        throw err;
+        const batch = writeBatch(db);
+        batch.set(logRef, {
+          runAt: new Date(),
+          runBy,
+          businessDay: businessDayStr,
+          summary,
+          issues: newIssues,
+          createdAt: serverTimestamp(),
+        });
+        batch.set(snapshotRef, {
+          roomsTotal,
+          roomsOccupied,
+          totalReservations: reservations.length,
+          totalStays: stays.length,
+          totalPostings: postings.length,
+          totalPayments: payments.length,
+          createdAt: serverTimestamp(),
+        });
+        for (const w of issueWrites) {
+          batch.set(w.ref, w.data, { merge: true });
+        }
+        await batch.commit();
+      } catch (batchErr) {
+        console.error("runNightAudit batch.commit failed:", batchErr);
+
+        await setDoc(logRef, {
+          runAt: new Date(),
+          runBy,
+          businessDay: businessDayStr,
+          summary,
+          issues: newIssues,
+          createdAt: serverTimestamp(),
+        });
+
+        await setDoc(snapshotRef, {
+          roomsTotal,
+          roomsOccupied,
+          totalReservations: reservations.length,
+          totalStays: stays.length,
+          totalPostings: postings.length,
+          totalPayments: payments.length,
+          createdAt: serverTimestamp(),
+        });
+
+        for (const w of issueWrites) {
+          await setDoc(w.ref, w.data, { merge: true });
+        }
       }
     }
+
+    return { issues: newIssues, summary };
+  } catch (err) {
+    console.error("runNightAudit error:", err);
+    throw err;
   }
 }
