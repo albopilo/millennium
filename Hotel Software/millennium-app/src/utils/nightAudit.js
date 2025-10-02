@@ -27,9 +27,6 @@ function startOfDayInTZ(d) {
   return dt;
 }
 
-/**
- * Determine business-day date (in timezone) for the audit run.
- */
 function businessDayForRunTime(runDate = null, tzOffset = 7) {
   const now = runDate ? new Date(runDate) : nowInTZ(tzOffset);
   const hours = now.getHours();
@@ -39,6 +36,21 @@ function businessDayForRunTime(runDate = null, tzOffset = 7) {
     return startOfDayInTZ(prev);
   }
   return startOfDayInTZ(now);
+}
+
+/**
+ * Helper wrapper: safe reads with diagnostics
+ */
+async function safeGetDocs(collName, q = null) {
+  try {
+    const snap = q
+      ? await getDocs(q)
+      : await getDocs(collection(db, collName));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  } catch (err) {
+    console.error(`nightAudit: read failed for collection "${collName}"`, err);
+    throw err; // rethrow so runNightAudit sees permission problems
+  }
 }
 
 /**
@@ -57,30 +69,21 @@ export async function runNightAudit({ runBy = "system", finalize = false, tzOffs
   const roomTypeCounts = {};
 
   try {
-    // Rooms
-    const roomsSnap = await getDocs(collection(db, "rooms"));
-    const rooms = roomsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    // Data loads
+    const rooms = await safeGetDocs("rooms");
+    const reservations = await safeGetDocs(
+      "reservations",
+      query(
+        collection(db, "reservations"),
+        where("status", "in", ["booked", "checked-in", "checked-out", "cancelled"])
+      )
+    );
+    const stays = await safeGetDocs("stays");
+    const postings = await safeGetDocs("postings");
+    const payments = await safeGetDocs("payments");
+
     roomsTotal = rooms.length;
     roomsOccupied = rooms.filter((r) => (r.status || "").toLowerCase() === "occupied").length;
-
-    // Reservations
-    const resQ = query(
-      collection(db, "reservations"),
-      where("status", "in", ["booked", "checked-in", "checked-out", "cancelled"])
-    );
-    const resSnap = await getDocs(resQ);
-    const reservations = resSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
-
-    // Stays
-    const stayQ = query(collection(db, "stays"));
-    const staySnap = await getDocs(stayQ);
-    const stays = staySnap.docs.map((d) => ({ id: d.id, ...d.data() }));
-
-    // Postings & payments
-    const postingSnap = await getDocs(collection(db, "postings"));
-    const postings = postingSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
-    const paymentSnap = await getDocs(collection(db, "payments"));
-    const payments = paymentSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
 
     // 1) Stays must link to reservation
     for (const s of stays.filter((x) => (x.status || "").toLowerCase() === "open")) {
@@ -226,10 +229,11 @@ export async function runNightAudit({ runBy = "system", finalize = false, tzOffs
     }
 
     // Load already noticed issues
-    const noticedSnap = await getDocs(
+    const noticedSnap = await safeGetDocs(
+      "nightAuditIssues",
       query(collection(db, "nightAuditIssues"), where("noticed", "==", true))
     );
-    const noticedKeys = new Set(noticedSnap.docs.map((d) => d.id));
+    const noticedKeys = new Set(noticedSnap.map((d) => d.id));
 
     const newIssues = issues.filter((issue) => {
       const key = `${issue.type}:${issue.reservationId || issue.stayId || issue.roomNumber || "?"}`;
