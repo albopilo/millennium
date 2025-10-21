@@ -510,7 +510,45 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
   const displayPaymentsTotal = (payments || []).filter(p => ((p.status || "") + "").toLowerCase() !== "void").reduce((s, p) => s + Number(p.amount || 0), 0);
   const displayBalance = displayChargesTotal - displayPaymentsTotal;
 
-  // Exported props for children
+    if (loading)
+    return <div className="p-6 text-center">Loading reservation…</div>;
+  if (!reservation)
+    return (
+      <div className="p-6 text-center text-gray-600">
+        Reservation not found.
+      </div>
+    );
+
+  // Simple print helpers (can be replaced with custom templates)
+  const printCheckInForm = () => {
+    const content = `
+      <h2>Check-In Form</h2>
+      <p>Guest: ${reservation.guestName}</p>
+      <p>Stay: ${fmt(reservation.checkInDate)} → ${fmt(reservation.checkOutDate)}</p>
+      <p>Rooms: ${(reservation.roomNumbers || []).join(", ")}</p>
+      <p>Handled by: ${actorName}</p>
+    `;
+    const w = window.open("", "_blank");
+    w.document.write(`<html><body>${content}</body></html>`);
+    w.print();
+    w.close();
+  };
+
+  const printCheckOutBill = () => {
+    const content = `
+      <h2>Check-Out Bill</h2>
+      <p>Guest: ${reservation.guestName}</p>
+      <p>Charges Total: ${currency} ${fmtMoney(displayChargesTotal)}</p>
+      <p>Payments Total: ${currency} ${fmtMoney(displayPaymentsTotal)}</p>
+      <p>Balance: ${currency} ${fmtMoney(displayBalance)}</p>
+      <p>Handled by: ${actorName}</p>
+    `;
+    const w = window.open("", "_blank");
+    w.document.write(`<html><body>${content}</body></html>`);
+    w.print();
+    w.close();
+  };
+
   const childProps = {
     reservation,
     guest,
@@ -543,26 +581,26 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
     fmtMoney,
     logReservationChange: logAction,
     isAdmin,
+    printCheckInForm,
+    printCheckOutBill,
   };
-
-  if (loading) return <div className="p-6 text-center">Loading reservation…</div>;
-  if (!reservation) return <div className="p-6 text-center text-gray-600">Reservation not found.</div>;
 
   return (
     <div className="max-w-6xl mx-auto p-6 space-y-6">
       <h2 className="text-2xl font-bold text-gray-800">Reservation Detail</h2>
 
-      <ReservationDetailB {...childProps} />
-      <ReservationDetailC
-        reservation={reservation}
-        displayChargeLines={displayChargeLines}
-        displayChargesTotal={displayChargesTotal}
-        displayPaymentsTotal={displayPaymentsTotal}
-        displayBalance={displayBalance}
-        currency={currency}
-        fmtMoney={fmtMoney}
-        {...childProps}
-      />
+      <ReservationDetailB {...childProps}>
+        <ReservationDetailC
+          reservation={reservation}
+          displayChargeLines={displayChargeLines}
+          displayChargesTotal={displayChargesTotal}
+          displayPaymentsTotal={displayPaymentsTotal}
+          displayBalance={displayBalance}
+          currency={currency}
+          fmtMoney={fmtMoney}
+          {...childProps}
+        />
+      </ReservationDetailB>
     </div>
   );
 }
