@@ -19,8 +19,9 @@ import { db } from "../firebase";
 import { fmt, ymd } from "../lib/dates";
 import ReservationDetailB from "./ReservationDetailB";
 import ReservationDetailC from "./ReservationDetailC";
+import "../styles/ReservationDetail.css";
 
-export default function ReservationDetailA({ permissions = [], currentUser, userData }) {
+export default function ReservationDetailA({ permissions = [], currentUser = null, userData = null }) {
   const { id } = useParams();
   const navigate = useNavigate();
   const actorName =
@@ -30,28 +31,25 @@ export default function ReservationDetailA({ permissions = [], currentUser, user
     "frontdesk";
   const isAdmin = userData?.roleId === "admin";
 
-  // === Core states ===
+  // States
+  const [loading, setLoading] = useState(true);
   const [reservation, setReservation] = useState(null);
   const [rooms, setRooms] = useState([]);
+  const [stays, setStays] = useState([]);
+  const [postings, setPostings] = useState([]);
+  const [payments, setPayments] = useState([]);
   const [guest, setGuest] = useState(null);
   const [settings, setSettings] = useState({ currency: "IDR", depositPerRoom: 0 });
   const [rates, setRates] = useState([]);
   const [events, setEvents] = useState([]);
   const [channels, setChannels] = useState([]);
-  const [stays, setStays] = useState([]);
-  const [postings, setPostings] = useState([]);
-  const [payments, setPayments] = useState([]);
   const [logs, setLogs] = useState([]);
-  const [loading, setLoading] = useState(true);
-
-  const can = (p) => permissions.includes(p) || permissions.includes("*");
-  const canOperate = can("canOperateFrontDesk") || can("canEditReservations");
-
   const [assignRooms, setAssignRooms] = useState([]);
+
+  // UI states for modals and free-typing numeric fields (strings)
   const [showAddCharge, setShowAddCharge] = useState(false);
   const [showAddPayment, setShowAddPayment] = useState(false);
 
-  // Simple numeric-friendly states
   const [chargeForm, setChargeForm] = useState({
     description: "",
     qtyStr: "1",
@@ -65,15 +63,28 @@ export default function ReservationDetailA({ permissions = [], currentUser, user
     refNo: "",
   });
 
+  const can = (perm) => Array.isArray(permissions) && (permissions.includes(perm) || permissions.includes("*"));
+  const canOperate = can("canOperateFrontDesk") || can("canEditReservations");
+  const canManage = can("canEditReservations") || can("canManageReservations");
+
+  // helpers
   const currency = settings.currency || "IDR";
   const fmtMoney = (n) =>
     isNaN(n) ? "-" : Number(n).toLocaleString("id-ID", { minimumFractionDigits: 0 });
 
-  // === Load data ===
-  const load = async () => {
+  // Load all data needed for page
+  async function loadAll() {
+    if (!id) return;
     setLoading(true);
     try {
-      const [resSnap, roomsSnap, settingsSnap, ratesSnap, eventsSnap, channelsSnap] = await Promise.all([
+      const [
+        resSnap,
+        roomsSnap,
+        settingsSnap,
+        ratesSnap,
+        eventsSnap,
+        channelsSnap,
+      ] = await Promise.all([
         getDoc(doc(db, "reservations", id)),
         getDocs(collection(db, "rooms")),
         getDoc(doc(db, "settings", "general")),
@@ -81,132 +92,467 @@ export default function ReservationDetailA({ permissions = [], currentUser, user
         getDocs(collection(db, "events")),
         getDocs(collection(db, "channels")),
       ]);
-      if (!resSnap.exists()) return navigate("/calendar");
-      const res = { id: resSnap.id, ...resSnap.data() };
-      setReservation(res);
-      setRooms(roomsSnap.docs.map((d) => d.data()));
-      if (settingsSnap.exists()) setSettings(settingsSnap.data());
+
+      if (!resSnap.exists()) {
+        setLoading(false);
+        navigate("/calendar");
+        return;
+      }
+      const r = { id: resSnap.id, ...resSnap.data() };
+      setReservation(r);
+
+      setRooms(roomsSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
       setRates(ratesSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
       setEvents(eventsSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
       setChannels(channelsSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
 
-      // Load guest
-      if (res.guestId) {
-        const gSnap = await getDoc(doc(db, "guests", res.guestId));
+      if (settingsSnap.exists()) setSettings(settingsSnap.data());
+
+      // guest
+      if (r.guestId) {
+        const gSnap = await getDoc(doc(db, "guests", r.guestId));
         if (gSnap.exists()) setGuest({ id: gSnap.id, ...gSnap.data() });
+      } else {
+        // try match by name
+        const gQ = query(collection(db, "guests"), where("name", "==", r.guestName || ""));
+        const gS = await getDocs(gQ);
+        if (!gS.empty) setGuest({ id: gS.docs[0].id, ...gS.docs[0].data() });
       }
 
-      // Load folio
-      const [pSnap, paySnap] = await Promise.all([
+      // postings/payments/stays
+      const [pSnap, paySnap, sSnap] = await Promise.all([
         getDocs(query(collection(db, "postings"), where("reservationId", "==", id))),
         getDocs(query(collection(db, "payments"), where("reservationId", "==", id))),
+        getDocs(query(collection(db, "stays"), where("reservationId", "==", id))),
       ]);
       setPostings(pSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
       setPayments(paySnap.docs.map((d) => ({ id: d.id, ...d.data() })));
-
-      // Stays
-      const sSnap = await getDocs(query(collection(db, "stays"), where("reservationId", "==", id)));
       setStays(sSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
 
-      setAssignRooms(Array.isArray(res.roomNumbers) ? [...res.roomNumbers] : []);
+      // assignment
+      setAssignRooms(Array.isArray(r.roomNumbers) ? [...r.roomNumbers] : []);
+
+      // subscribe logs separately (keeps UI live)
+      // (subscription handled in useEffect below)
+    } catch (err) {
+      console.error("loadAll error:", err);
     } finally {
       setLoading(false);
     }
-  };
+  }
 
   useEffect(() => {
-    if (id) load();
+    if (id) loadAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  // === Live log subscription ===
+  // logs subscription
   useEffect(() => {
     if (!id) return;
-    const ref = collection(doc(db, "reservations", id), "logs");
-    const q = query(ref, orderBy("createdAt", "desc"));
+    const collRef = collection(doc(db, "reservations", id), "logs");
+    const q = query(collRef, orderBy("createdAt", "desc"));
     const unsub = onSnapshot(q, (snap) => {
       setLogs(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+    }, (err) => {
+      console.error("logs onSnapshot error:", err);
     });
     return () => unsub();
   }, [id]);
 
-  // === Derived folio values ===
-  const statusOf = (p) => (p.status || "").toLowerCase();
-  const acctOf = (p) => (p.accountCode || "").toUpperCase();
-  const visiblePostings = useMemo(
-    () => postings.filter((p) => statusOf(p) !== "void"),
-    [postings]
-  );
+  // Utilities
+  const statusOf = (s) => ((s || "").toLowerCase());
+  const onlyDigits = (s) => (s || "").replace(/[^\d.-]/g, "");
 
-  const displayChargeLines = visiblePostings.filter((p) => acctOf(p) !== "PAY");
-  const displayChargesTotal = displayChargeLines.reduce(
-    (sum, p) => sum + Number(p.amount || 0),
-    0
-  );
-  const displayPaymentsTotal = payments.reduce(
-    (sum, p) => sum + Number(p.amount || 0),
-    0
-  );
+  // Logging helper (safe)
+  async function logAction(action, payload = {}) {
+    try {
+      const now = new Date();
+      const entry = {
+        reservationId: reservation?.id || id,
+        action,
+        by: actorName,
+        payload: payload || {},
+        createdAt: now,
+      };
+      // write to global collection (best-effort)
+      try {
+        await addDoc(collection(db, "reservation_logs"), entry);
+      } catch (e) { /* ignore */ }
+      // write under reservation subcollection
+      try {
+        if (reservation?.id) {
+          await addDoc(collection(doc(db, "reservations", reservation.id), "logs"), entry);
+        }
+      } catch (e) { /* ignore */ }
+    } catch (err) {
+      console.error("logAction error:", err);
+    }
+  }
+
+  // Room availability check (simple)
+  async function isRoomAvailableForRes(roomNumber) {
+    if (!reservation?.checkInDate || !reservation?.checkOutDate) return true;
+    const inD = reservation.checkInDate?.toDate ? reservation.checkInDate.toDate() : new Date(reservation.checkInDate);
+    const outD = reservation.checkOutDate?.toDate ? reservation.checkOutDate.toDate() : new Date(reservation.checkOutDate);
+
+    const qRes = query(
+      collection(db, "reservations"),
+      where("roomNumbers", "array-contains", roomNumber),
+      where("status", "in", ["booked", "checked-in"])
+    );
+    const snap = await getDocs(qRes);
+    return snap.docs.every((d) => {
+      const r = d.data();
+      if (d.id === reservation.id) return true;
+      const rIn = r.checkInDate?.toDate ? r.checkInDate.toDate() : new Date(r.checkInDate);
+      const rOut = r.checkOutDate?.toDate ? r.checkOutDate.toDate() : new Date(r.checkOutDate);
+      return outD <= rIn || inD >= rOut;
+    });
+  }
+
+  // Persist assignRooms to reservation and create simple forecasts (very lightweight)
+  async function persistAssignment(nextAssign = []) {
+    if (!reservation?.id) return;
+    try {
+      await updateDoc(doc(db, "reservations", reservation.id), { roomNumbers: nextAssign });
+      await logAction("assignment.update", { roomNumbers: nextAssign });
+      // reload to reflect postings/stays
+      await loadAll();
+    } catch (err) {
+      console.error("persistAssignment error:", err);
+      throw err;
+    }
+  }
+
+  // Check-in action: create stays + set room status and update reservation
+  async function doCheckIn() {
+    if (!canOperate || !reservation) return;
+    if (!assignRooms.length) {
+      window.alert("Assign at least one room before check-in.");
+      return;
+    }
+    // availability checks
+    for (const roomNumber of assignRooms) {
+      const ok = await isRoomAvailableForRes(roomNumber);
+      if (!ok) {
+        window.alert(`Room ${roomNumber} is unavailable for these dates.`);
+        return;
+      }
+    }
+
+    try {
+      await runTransaction(db, async (tx) => {
+        const resRef = doc(db, "reservations", reservation.id);
+        const resSnap = await tx.get(resRef);
+        if (!resSnap.exists()) throw new Error("Reservation not found.");
+        if (statusOf(resSnap.data().status) !== "booked") throw new Error("Reservation not in booked status.");
+
+        // create stays deterministically per assigned room
+        for (const rn of assignRooms) {
+          const stayRef = doc(collection(db, "stays"));
+          tx.set(stayRef, {
+            reservationId: reservation.id,
+            guestId: reservation.guestId || null,
+            guestName: reservation.guestName || "",
+            roomNumber: rn,
+            checkInDate: reservation.checkInDate,
+            checkOutDate: reservation.checkOutDate,
+            openedAt: new Date(),
+            status: "open",
+            createdBy: actorName,
+          });
+          // set room status to Occupied
+          tx.update(doc(db, "rooms", rn), { status: "Occupied" });
+        }
+        tx.update(resRef, { status: "checked-in", checkedInAt: new Date(), roomNumbers: assignRooms });
+      });
+      await logAction("checkin", { rooms: assignRooms });
+      await loadAll();
+      window.alert("Check-in complete.");
+    } catch (err) {
+      console.error("doCheckIn error:", err);
+      window.alert("Check-in failed: " + (err.message || err));
+    }
+  }
+
+  // Check-out: close stays, set rooms to Vacant Dirty, update reservation status
+  async function doCheckOut() {
+    if (!canOperate || !reservation) return;
+    try {
+      await runTransaction(db, async (tx) => {
+        // close open stays for this reservation
+        const sSnap = await getDocs(query(collection(db, "stays"), where("reservationId", "==", reservation.id), where("status", "==", "open")));
+        for (const d of sSnap.docs) {
+          tx.update(doc(db, "stays", d.id), { status: "closed", closedAt: new Date() });
+          const st = d.data();
+          if (st?.roomNumber) {
+            tx.update(doc(db, "rooms", st.roomNumber), { status: "Vacant Dirty" });
+          }
+        }
+        // mark reservation checked-out if no open stays remain
+        tx.update(doc(db, "reservations", reservation.id), { status: "checked-out", checkedOutAt: new Date() });
+      });
+      await logAction("checkout", {});
+      await loadAll();
+      window.alert("Checked out.");
+    } catch (err) {
+      console.error("doCheckOut error:", err);
+      window.alert("Check-out failed: " + (err.message || err));
+    }
+  }
+
+  // Change room (same type) — expects moveRoomStayId + newRoom
+  async function doChangeRoom(moveStay, newRoomNumber) {
+    if (!canOperate || !moveStay || !newRoomNumber) return;
+    try {
+      // availability check
+      const ok = await isRoomAvailableForRes(newRoomNumber);
+      if (!ok) { window.alert("Target room not available."); return; }
+
+      await runTransaction(db, async (tx) => {
+        const stayRef = doc(db, "stays", moveStay.id);
+        const newRoomRef = doc(db, "rooms", newRoomNumber);
+        const oldRoomRef = doc(db, "rooms", moveStay.roomNumber);
+
+        const [staySnap, newRoomSnap] = await Promise.all([tx.get(stayRef), tx.get(newRoomRef)]);
+        if (!staySnap.exists()) throw new Error("Stay not found.");
+        if (!newRoomSnap.exists()) throw new Error("New room not found.");
+        const nr = newRoomSnap.data();
+        if (nr.status === "OOO" || nr.status === "Occupied") throw new Error("New room not available.");
+
+        tx.update(stayRef, { roomNumber: newRoomNumber, movedAt: new Date(), movedBy: actorName });
+        tx.update(oldRoomRef, { status: "Vacant Dirty" });
+        tx.update(newRoomRef, { status: "Occupied" });
+      });
+      await logAction("room.move", { from: moveStay.roomNumber, to: newRoomNumber, stayId: moveStay.id });
+      await loadAll();
+      window.alert("Room changed.");
+    } catch (err) {
+      console.error("doChangeRoom error:", err);
+      window.alert("Change room failed: " + (err.message || err));
+    }
+  }
+
+  // Pre-check-in upgrade: change assignRooms and add optional ADJ posting (simple)
+  async function doUpgradePreCheckIn(index, targetRoomNumber, adjustmentAmount = 0) {
+    if (!canOperate) return;
+    try {
+      const next = [...assignRooms];
+      next[index] = targetRoomNumber;
+      await persistAssignment(next);
+      if (adjustmentAmount && Number(adjustmentAmount) !== 0) {
+        await addDoc(collection(db, "postings"), {
+          reservationId: reservation.id,
+          description: "Upgrade adjustment (pre check-in)",
+          amount: Number(adjustmentAmount),
+          status: "forecast",
+          accountCode: "ADJ",
+          createdAt: new Date(),
+          createdBy: actorName,
+        });
+      }
+      await logAction("upgrade.pre", { index, to: targetRoomNumber, adj: adjustmentAmount });
+      await loadAll();
+      window.alert("Upgrade applied (pre check-in).");
+    } catch (err) {
+      console.error("doUpgradePreCheckIn error:", err);
+      window.alert("Upgrade failed: " + (err.message || err));
+    }
+  }
+
+  // Post-check-in upgrade: switch stay room and post adjustment ADJ
+  async function doUpgradeRoom(upgradeStayObj, targetRoomNumber, adjAmount = 0) {
+    if (!canOperate || !upgradeStayObj) return;
+    try {
+      // availability check
+      const ok = await isRoomAvailableForRes(targetRoomNumber);
+      if (!ok) { window.alert("Target room not available."); return; }
+
+      await runTransaction(db, async (tx) => {
+        const stayRef = doc(db, "stays", upgradeStayObj.id);
+        const newRoomRef = doc(db, "rooms", targetRoomNumber);
+        const oldRoomRef = doc(db, "rooms", upgradeStayObj.roomNumber);
+
+        const [staySnap, newRoomSnap] = await Promise.all([tx.get(stayRef), tx.get(newRoomRef)]);
+        if (!staySnap.exists()) throw new Error("Stay not found.");
+        const nr = newRoomSnap.data();
+        if (!newRoomSnap.exists() || nr.status === "OOO" || nr.status === "Occupied") throw new Error("Target room not available.");
+
+        tx.update(stayRef, { roomNumber: targetRoomNumber, movedAt: new Date(), movedBy: actorName });
+        tx.update(oldRoomRef, { status: "Vacant Dirty" });
+        tx.update(newRoomRef, { status: "Occupied" });
+
+        if (adjAmount && Number(adjAmount) !== 0) {
+          const adjRef = doc(collection(db, "postings"));
+          tx.set(adjRef, {
+            reservationId: reservation.id,
+            stayId: upgradeStayObj.id,
+            roomNumber: targetRoomNumber,
+            description: "Upgrade adjustment (post check-in)",
+            amount: Number(adjAmount),
+            tax: 0,
+            service: 0,
+            status: "posted",
+            accountCode: "ADJ",
+            createdAt: new Date(),
+            createdBy: actorName,
+          });
+        }
+      });
+
+      await logAction("upgrade.after", { from: upgradeStayObj.roomNumber, to: targetRoomNumber, adj: adjAmount });
+      await loadAll();
+      window.alert("Upgrade completed.");
+    } catch (err) {
+      console.error("doUpgradeRoom error:", err);
+      window.alert("Upgrade failed: " + (err.message || err));
+    }
+  }
+
+  // Add charge (free-typing allowed). Parse values at submit time.
+  async function submitCharge() {
+    const qty = parseFloat(onlyDigits(chargeForm.qtyStr)) || 1;
+    const unit = parseFloat(onlyDigits(chargeForm.unitStr)) || 0;
+    const total = Math.round(qty * unit);
+    if (!chargeForm.description?.trim()) { window.alert("Description required."); return; }
+    if (total <= 0) { window.alert("Total amount must be > 0."); return; }
+    const status = statusOf(reservation?.status) === "checked-in" ? "posted" : "forecast";
+    try {
+      await addDoc(collection(db, "postings"), {
+        reservationId: reservation?.id || id,
+        description: chargeForm.description.trim(),
+        amount: total,
+        quantity: qty,
+        unitAmount: unit,
+        status,
+        accountCode: (chargeForm.accountCode || "MISC").toUpperCase(),
+        createdAt: new Date(),
+        createdBy: actorName,
+      });
+      setChargeForm({ description: "", qtyStr: "1", unitStr: "", accountCode: "MISC" });
+      setShowAddCharge(false);
+      await logAction("posting.add", { description: chargeForm.description, amount: total });
+      await loadAll();
+    } catch (err) {
+      console.error("submitCharge error:", err);
+      window.alert("Failed to add charge.");
+    }
+  }
+
+  // Add payment (free typing)
+  async function submitPayment() {
+    const amt = parseFloat(onlyDigits(paymentForm.amountStr)) || 0;
+    if (amt <= 0) { window.alert("Amount must be > 0"); return; }
+    try {
+      await addDoc(collection(db, "payments"), {
+        reservationId: reservation?.id || id,
+        amount: amt,
+        method: paymentForm.method || "cash",
+        refNo: paymentForm.refNo || "",
+        capturedAt: new Date(),
+        capturedBy: actorName,
+      });
+      setPaymentForm({ amountStr: "", method: "cash", refNo: "" });
+      setShowAddPayment(false);
+      await logAction("payment.add", { amount: amt, method: paymentForm.method });
+      await loadAll();
+    } catch (err) {
+      console.error("submitPayment error:", err);
+      window.alert("Failed to add payment.");
+    }
+  }
+
+  // UI renderer for assignment row (used by child)
+  const renderAssignmentRow = (idx) => {
+    const val = assignRooms[idx] || "";
+    const lockType = (() => {
+      // if reservation has roomNumbers with types, lock type by index
+      const rtype = rooms.find((r) => r.roomNumber === (reservation?.roomNumbers?.[idx] || assignRooms[idx]))?.roomType;
+      return rtype || null;
+    })();
+
+    const options = rooms
+      .filter((r) => (r.status || "").toLowerCase() !== "ooo" && (r.status || "").toLowerCase() !== "occupied")
+      .filter((r) => !lockType || r.roomType === lockType)
+      .map((r) => ({ value: r.roomNumber, label: `${r.roomNumber} (${r.roomType || "—"}) ${r.status ? `[${r.status}]` : ""}` }));
+
+    // return an element — child will render it where needed
+    return (
+      <select
+        value={val}
+        onChange={async (e) => {
+          const newVal = e.target.value || "";
+          const next = [...assignRooms];
+          next[idx] = newVal;
+          setAssignRooms(next);
+          try {
+            await persistAssignment(next);
+          } catch (err) {
+            console.error("assign persist failed:", err);
+            window.alert("Failed to assign room.");
+          }
+        }}
+      >
+        <option value="">(select room)</option>
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    );
+  };
+
+  // Derived totals for folio (simple)
+  const visiblePostings = useMemo(() => (postings || []).filter((p) => ((p.status || "") + "").toLowerCase() !== "void"), [postings]);
+  const displayChargeLines = visiblePostings.filter((p) => ((p.accountCode || "") + "").toUpperCase() !== "PAY");
+  const displayChargesTotal = displayChargeLines.reduce((s, p) => s + Number(p.amount || 0), 0);
+  const displayPaymentsTotal = (payments || []).filter(p => ((p.status || "") + "").toLowerCase() !== "void").reduce((s, p) => s + Number(p.amount || 0), 0);
   const displayBalance = displayChargesTotal - displayPaymentsTotal;
 
-  // === Submit handlers (no debounce / free typing) ===
-  const submitCharge = async () => {
-    const qty = parseFloat(chargeForm.qtyStr) || 1;
-    const unit = parseFloat(chargeForm.unitStr) || 0;
-    const total = qty * unit;
-    if (!chargeForm.description.trim()) return alert("Description required.");
-    if (total <= 0) return alert("Total must be > 0");
-    const status = (reservation?.status || "").toLowerCase() === "checked-in" ? "posted" : "forecast";
-    await addDoc(collection(db, "postings"), {
-      reservationId: id,
-      description: chargeForm.description.trim(),
-      accountCode: (chargeForm.accountCode || "MISC").toUpperCase(),
-      amount: total,
-      quantity: qty,
-      unitAmount: unit,
-      status,
-      createdAt: new Date(),
-      createdBy: actorName,
-    });
-    setChargeForm({ description: "", qtyStr: "1", unitStr: "", accountCode: "MISC" });
-    setShowAddCharge(false);
-    await load();
+  // Exported props for children
+  const childProps = {
+    reservation,
+    guest,
+    settings,
+    rooms,
+    stays,
+    assignRooms,
+    setAssignRooms,
+    renderAssignmentRow,
+    canOperate,
+    canUpgrade: can("canUpgradeRoom") || can("canOverrideRoomType"),
+    doCheckIn,
+    doCheckOut,
+    doChangeRoom,
+    doUpgradePreCheckIn,
+    doUpgradeRoom,
+    showAddCharge,
+    setShowAddCharge,
+    showAddPayment,
+    setShowAddPayment,
+    chargeForm,
+    setChargeForm,
+    submitCharge,
+    paymentForm,
+    setPaymentForm,
+    submitPayment,
+    logs,
+    fmt,
+    currency,
+    fmtMoney,
+    logReservationChange: logAction,
+    isAdmin,
   };
 
-  const submitPayment = async () => {
-    const amt = parseFloat(paymentForm.amountStr) || 0;
-    if (amt <= 0) return alert("Payment must be > 0");
-    await addDoc(collection(db, "payments"), {
-      reservationId: id,
-      amount: amt,
-      method: paymentForm.method || "cash",
-      refNo: paymentForm.refNo || "",
-      capturedAt: new Date(),
-      capturedBy: actorName,
-    });
-    setPaymentForm({ amountStr: "", method: "cash", refNo: "" });
-    setShowAddPayment(false);
-    await load();
-  };
-
-  // === UI ===
   if (loading) return <div className="p-6 text-center">Loading reservation…</div>;
   if (!reservation) return <div className="p-6 text-center text-gray-600">Reservation not found.</div>;
 
   return (
     <div className="max-w-6xl mx-auto p-6 space-y-6">
-      <h2 className="text-2xl font-bold text-gray-800 mb-2">
-        Reservation Detail
-      </h2>
+      <h2 className="text-2xl font-bold text-gray-800">Reservation Detail</h2>
 
-      <ReservationDetailB
-        reservation={reservation}
-        guest={guest}
-        rooms={rooms}
-        assignRooms={assignRooms}
-        setAssignRooms={setAssignRooms}
-        canOperate={canOperate}
-      />
-
+      <ReservationDetailB {...childProps} />
       <ReservationDetailC
         reservation={reservation}
         displayChargeLines={displayChargeLines}
@@ -214,141 +560,9 @@ export default function ReservationDetailA({ permissions = [], currentUser, user
         displayPaymentsTotal={displayPaymentsTotal}
         displayBalance={displayBalance}
         currency={currency}
-        showAddCharge={showAddCharge}
-        setShowAddCharge={setShowAddCharge}
-        chargeForm={chargeForm}
-        setChargeForm={setChargeForm}
-        submitCharge={submitCharge}
-        showAddPayment={showAddPayment}
-        setShowAddPayment={setShowAddPayment}
-        paymentForm={paymentForm}
-        setPaymentForm={setPaymentForm}
-        submitPayment={submitPayment}
+        fmtMoney={fmtMoney}
+        {...childProps}
       />
-
-      {/* === Add Charge Modal === */}
-      {showAddCharge && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-          <div className="bg-white p-6 rounded-xl shadow-md w-96">
-            <h3 className="text-lg font-semibold mb-4">Add Charge</h3>
-            <input
-              className="border rounded-md w-full mb-3 p-2"
-              placeholder="Description"
-              value={chargeForm.description}
-              onChange={(e) =>
-                setChargeForm({ ...chargeForm, description: e.target.value })
-              }
-            />
-            <div className="flex gap-3 mb-3">
-              <input
-                type="number"
-                className="border rounded-md w-1/2 p-2"
-                placeholder="Qty"
-                value={chargeForm.qtyStr}
-                onChange={(e) =>
-                  setChargeForm({ ...chargeForm, qtyStr: e.target.value })
-                }
-              />
-              <input
-                type="number"
-                className="border rounded-md w-1/2 p-2"
-                placeholder="Unit"
-                value={chargeForm.unitStr}
-                onChange={(e) =>
-                  setChargeForm({ ...chargeForm, unitStr: e.target.value })
-                }
-              />
-            </div>
-            <div className="flex justify-end gap-3">
-              <button
-                className="px-4 py-2 bg-gray-200 rounded-md"
-                onClick={() => setShowAddCharge(false)}
-              >
-                Cancel
-              </button>
-              <button
-                className="px-4 py-2 bg-blue-600 text-white rounded-md"
-                onClick={submitCharge}
-              >
-                Add
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* === Add Payment Modal === */}
-      {showAddPayment && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-          <div className="bg-white p-6 rounded-xl shadow-md w-96">
-            <h3 className="text-lg font-semibold mb-4">Add Payment</h3>
-            <input
-              type="number"
-              className="border rounded-md w-full mb-3 p-2"
-              placeholder="Amount"
-              value={paymentForm.amountStr}
-              onChange={(e) =>
-                setPaymentForm({ ...paymentForm, amountStr: e.target.value })
-              }
-            />
-            <input
-              className="border rounded-md w-full mb-3 p-2"
-              placeholder="Reference No"
-              value={paymentForm.refNo}
-              onChange={(e) =>
-                setPaymentForm({ ...paymentForm, refNo: e.target.value })
-              }
-            />
-            <select
-              className="border rounded-md w-full mb-3 p-2"
-              value={paymentForm.method}
-              onChange={(e) =>
-                setPaymentForm({ ...paymentForm, method: e.target.value })
-              }
-            >
-              <option value="cash">Cash</option>
-              <option value="card">Card</option>
-              <option value="transfer">Transfer</option>
-            </select>
-            <div className="flex justify-end gap-3">
-              <button
-                className="px-4 py-2 bg-gray-200 rounded-md"
-                onClick={() => setShowAddPayment(false)}
-              >
-                Cancel
-              </button>
-              <button
-                className="px-4 py-2 bg-green-600 text-white rounded-md"
-                onClick={submitPayment}
-              >
-                Add
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* === Logs === */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200">
-        <header className="px-4 py-2 border-b bg-gray-50 rounded-t-xl">
-          <h3 className="font-semibold text-gray-700">Change Log</h3>
-        </header>
-        <div className="p-4 space-y-2 max-h-72 overflow-y-auto text-sm">
-          {logs.length === 0 ? (
-            <div className="text-gray-500 italic">No logs yet.</div>
-          ) : (
-            logs.map((l) => (
-              <div key={l.id} className="border-b pb-2">
-                <div className="font-medium">{l.action?.toUpperCase()}</div>
-                <div className="text-gray-600 text-xs">
-                  by {l.by || "Unknown"} at{" "}
-                  {new Date(l.createdAt?.seconds * 1000 || Date.now()).toLocaleString()}
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-      </div>
     </div>
   );
 }
