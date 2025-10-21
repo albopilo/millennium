@@ -1,17 +1,16 @@
 // src/pages/ReservationDetailA.jsx
-import React, { useEffect, useMemo, useState, useCallback } from "react";
+import React, { useEffect, useState, useMemo, useCallback } from "react";
 import { useParams } from "react-router-dom";
 import {
-  collection,
   doc,
   getDoc,
-  getDocs,
+  addDoc,
+  collection,
   query,
   where,
   orderBy,
   onSnapshot,
   runTransaction,
-  addDoc,
   serverTimestamp,
 } from "firebase/firestore";
 import DOMPurify from "dompurify";
@@ -20,6 +19,17 @@ import ReservationDetailB from "./ReservationDetailB";
 import ReservationDetailC from "./ReservationDetailC";
 import "../styles/ReservationDetail.css";
 
+/**
+ * ReservationDetailA
+ * ------------------------------------------------------------
+ * Objectives:
+ *  - Real-time reservation financial overview (charges, payments, balance)
+ *  - Transaction-safe check-in/out logic
+ *  - Manual charge/payment entry (no debounce)
+ *  - Smart printing from dynamic admin templates
+ *  - Improved UI feedback and data safety
+ */
+
 const DEFAULT_COMPANY = {
   companyName: "MILLENNIUM INN",
   companyAddress: "Jl. Example No. 1, City",
@@ -27,118 +37,89 @@ const DEFAULT_COMPANY = {
   companyPhone: "",
 };
 
-/**
- * ReservationDetailA (Enhanced)
- * ----------------------------------------
- * + Modular Firestore loading
- * + Real-time logs/postings/payments
- * + DOMPurify-safe print templates
- * + Atomic transactions (no async inside)
- * + Visual skeletons and inline feedback
- * + Improved readability and UX comfort
- */
-
 export default function ReservationDetailA({ currentUser = null, permissions = [] }) {
   const { id } = useParams();
   const [reservation, setReservation] = useState(null);
   const [guest, setGuest] = useState(null);
   const [postings, setPostings] = useState([]);
   const [payments, setPayments] = useState([]);
-  const [stays, setStays] = useState([]);
   const [logs, setLogs] = useState([]);
-  const [settings, setSettings] = useState({ currency: "IDR" });
+  const [settings, setSettings] = useState({});
   const [templates, setTemplates] = useState({});
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState(null);
 
-  const actorName =
-    currentUser?.displayName || currentUser?.name || "system";
+  const actor = currentUser?.displayName || currentUser?.name || "system";
 
-  /** ============ UTILITIES ============ **/
-  const fmtMoney = (n) =>
-    isNaN(n) ? "-" : Number(n).toLocaleString("id-ID");
-
-  const showMessage = (text, type = "info") => {
+  // Utility: show quick feedback
+  const showToast = (text, type = "info") => {
     setMessage({ text, type });
-    setTimeout(() => setMessage(null), 4000);
+    setTimeout(() => setMessage(null), 3500);
   };
 
-  /** ============ LOADERS ============ **/
-  const loadReservation = useCallback(async () => {
-    const snap = await getDoc(doc(db, "reservations", id));
-    if (!snap.exists()) return null;
-    return { id: snap.id, ...snap.data() };
-  }, [id]);
+  // Format helpers
+  const fmtMoney = (n) =>
+    isNaN(n) ? "-" : Number(n).toLocaleString("id-ID", { minimumFractionDigits: 0 });
 
-  const loadGuest = useCallback(async (guestId) => {
-    if (!guestId) return null;
-    const snap = await getDoc(doc(db, "guests", guestId));
-    return snap.exists() ? { id: snap.id, ...snap.data() } : null;
-  }, []);
-
-  const loadSettings = useCallback(async () => {
-    const settingsSnap = await getDoc(doc(db, "settings", "general"));
-    const templatesSnap = await getDoc(doc(db, "settings", "printTemplates"));
-    setSettings({
-      ...DEFAULT_COMPANY,
-      ...settingsSnap.data(),
-      currency: settingsSnap.data()?.currency || "IDR",
-    });
-    setTemplates(templatesSnap.data() || {});
-  }, []);
-
-  const setupRealtime = useCallback(() => {
-    // logs
-    const logsRef = collection(doc(db, "reservations", id), "logs");
-    const unsubLogs = onSnapshot(query(logsRef, orderBy("createdAt", "desc")), (snap) => {
-      setLogs(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-    });
-    // postings
-    const postingsRef = collection(db, "postings");
-    const unsubPostings = onSnapshot(query(postingsRef, where("reservationId", "==", id)), (snap) => {
-      setPostings(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-    });
-    // payments
-    const paymentsRef = collection(db, "payments");
-    const unsubPayments = onSnapshot(query(paymentsRef, where("reservationId", "==", id)), (snap) => {
-      setPayments(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-    });
-    return () => {
-      unsubLogs();
-      unsubPostings();
-      unsubPayments();
-    };
-  }, [id]);
-
+  /** ================= LOADERS ================= */
   useEffect(() => {
     if (!id) return;
+    setLoading(true);
+
+    // Reservation + guest (once)
     (async () => {
-      setLoading(true);
       try {
-        const res = await loadReservation();
-        if (!res) {
-          showMessage("Reservation not found.", "error");
+        const resSnap = await getDoc(doc(db, "reservations", id));
+        if (!resSnap.exists()) {
           setReservation(null);
+          setLoading(false);
           return;
         }
+        const res = { id: resSnap.id, ...resSnap.data() };
         setReservation(res);
-        setGuest(await loadGuest(res.guestId));
-        await loadSettings();
-        const staysSnap = await getDocs(query(collection(db, "stays"), where("reservationId", "==", id)));
-        setStays(staysSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
+
+        if (res.guestId) {
+          const gSnap = await getDoc(doc(db, "guests", res.guestId));
+          setGuest(gSnap.exists() ? { id: gSnap.id, ...gSnap.data() } : null);
+        }
+
+        // Settings & templates
+        const [settingsSnap, tplSnap] = await Promise.all([
+          getDoc(doc(db, "settings", "general")),
+          getDoc(doc(db, "settings", "printTemplates")),
+        ]);
+        setSettings({ ...DEFAULT_COMPANY, ...settingsSnap.data() });
+        setTemplates(tplSnap.data() || {});
       } catch (err) {
-        console.error(err);
-        showMessage("Failed to load reservation data.", "error");
+        console.error("load error", err);
+        showToast("Failed to load reservation", "error");
       } finally {
         setLoading(false);
       }
     })();
 
-    const unsub = setupRealtime();
-    return () => unsub?.();
-  }, [id, loadReservation, loadGuest, loadSettings, setupRealtime]);
+    // Realtime listeners
+    const unsubPostings = onSnapshot(
+      query(collection(db, "postings"), where("reservationId", "==", id)),
+      (snap) => setPostings(snap.docs.map((d) => ({ id: d.id, ...d.data() })))
+    );
+    const unsubPayments = onSnapshot(
+      query(collection(db, "payments"), where("reservationId", "==", id)),
+      (snap) => setPayments(snap.docs.map((d) => ({ id: d.id, ...d.data() })))
+    );
+    const unsubLogs = onSnapshot(
+      query(collection(doc(db, "reservations", id), "logs"), orderBy("createdAt", "desc")),
+      (snap) => setLogs(snap.docs.map((d) => ({ id: d.id, ...d.data() })))
+    );
 
-  /** ============ COMPUTED ============ **/
+    return () => {
+      unsubPostings();
+      unsubPayments();
+      unsubLogs();
+    };
+  }, [id]);
+
+  /** ================= COMPUTED ================= */
   const visiblePostings = useMemo(
     () => postings.filter((p) => (p.status || "").toLowerCase() !== "void"),
     [postings]
@@ -148,90 +129,163 @@ export default function ReservationDetailA({ currentUser = null, permissions = [
   const balance = chargesTotal - paymentsTotal;
   const status = (reservation?.status || "").toLowerCase();
 
-  /** ============ PRINT ============ **/
-  const sanitize = (html) => DOMPurify.sanitize(html || "");
-  const replaceTokens = (html, data) =>
-    html.replace(/{{\s*([^}]+)\s*}}/g, (_, key) => data[key.trim()] ?? "");
+  /** ================= LOGGING ================= */
+  const writeLog = async (action, meta = {}) => {
+    try {
+      await addDoc(collection(doc(db, "reservations", id), "logs"), {
+        action,
+        by: actor,
+        meta,
+        createdAt: serverTimestamp(),
+      });
+    } catch (err) {
+      console.error("log error", err);
+    }
+  };
+
+  /** ================= ACTIONS ================= */
+  const submitCharge = async ({ description, qtyStr, unitStr, accountCode = "MISC" }) => {
+    const qty = parseFloat(qtyStr);
+    const unit = parseFloat(unitStr);
+    const total = qty * unit;
+    if (!description?.trim()) return showToast("Description required", "error");
+    if (isNaN(total) || total <= 0) return showToast("Invalid amount", "error");
+
+    await addDoc(collection(db, "postings"), {
+      reservationId: id,
+      description: description.trim(),
+      accountCode: accountCode.toUpperCase(),
+      quantity: qty,
+      unitAmount: unit,
+      amount: total,
+      status: "posted",
+      createdAt: serverTimestamp(),
+      createdBy: actor,
+    });
+
+    await writeLog("add-charge", { description, total });
+    showToast("Charge added", "success");
+  };
+
+  const submitPayment = async ({ amountStr, method = "cash", refNo = "" }) => {
+    const amount = parseFloat(amountStr);
+    if (isNaN(amount) || amount <= 0) return showToast("Invalid payment", "error");
+
+    await addDoc(collection(db, "payments"), {
+      reservationId: id,
+      amount,
+      method,
+      refNo,
+      capturedAt: serverTimestamp(),
+      capturedBy: actor,
+    });
+
+    await writeLog("add-payment", { amount, method });
+    showToast("Payment added", "success");
+  };
+
+  const doCheckIn = async () => {
+    try {
+      await runTransaction(db, async (tx) => {
+        const ref = doc(db, "reservations", id);
+        const snap = await tx.get(ref);
+        if (!snap.exists()) throw new Error("Reservation not found");
+        const r = snap.data();
+        if ((r.status || "").toLowerCase() !== "booked")
+          throw new Error("Already checked in/out");
+        tx.update(ref, { status: "checked-in", checkInDate: new Date().toISOString(), updatedAt: serverTimestamp() });
+      });
+      await writeLog("check-in");
+      showToast("Guest checked in", "success");
+    } catch (err) {
+      showToast(err.message, "error");
+    }
+  };
+
+  const doCheckOut = async () => {
+    try {
+      await runTransaction(db, async (tx) => {
+        const ref = doc(db, "reservations", id);
+        const snap = await tx.get(ref);
+        if (!snap.exists()) throw new Error("Reservation not found");
+        const r = snap.data();
+        if ((r.status || "").toLowerCase() !== "checked-in")
+          throw new Error("Must be checked-in first");
+        tx.update(ref, { status: "checked-out", checkOutDate: new Date().toISOString(), updatedAt: serverTimestamp() });
+      });
+      await writeLog("check-out");
+      showToast("Guest checked out", "success");
+    } catch (err) {
+      showToast(err.message, "error");
+    }
+  };
+
+  /** ================= PRINT ================= */
+  const replaceTokens = (tpl, data) =>
+    tpl.replace(/{{\s*([^}]+)\s*}}/g, (_, key) => data[key.trim()] ?? "");
 
   const openPrintWindow = (html) => {
-    const w = window.open("", "_blank");
-    w.document.write(`<html><body>${html}</body></html>`);
-    w.document.close();
+    const win = window.open("", "_blank", "width=900,height=800");
+    win.document.write(`<html><body>${html}</body></html>`);
+    win.document.close();
   };
 
   const printTemplate = (type) => {
     const tpl = templates?.[type] || {};
     const data = {
-      ...DEFAULT_COMPANY,
-      ...settings,
       guestName: guest?.fullName || reservation?.guestName || "-",
       guestPhone: guest?.phone || "-",
       guestAddress: guest?.address || "-",
-      roomNumber:
-        Array.isArray(reservation?.roomNumbers)
-          ? reservation.roomNumbers.join(", ")
-          : reservation?.roomNumber || "-",
+      roomNumber: Array.isArray(reservation?.roomNumbers)
+        ? reservation.roomNumbers.join(", ")
+        : reservation?.roomNumber || "-",
       checkInDate: reservation?.checkInDate
         ? new Date(reservation.checkInDate).toLocaleString()
         : "-",
       checkOutDate: reservation?.checkOutDate
         ? new Date(reservation.checkOutDate).toLocaleString()
         : "-",
+      totalCharges: fmtMoney(chargesTotal),
+      totalPayments: fmtMoney(paymentsTotal),
       balance: fmtMoney(balance),
+      ...settings,
     };
 
-    const header = sanitize(replaceTokens(tpl.header || "<h2>{{companyName}}</h2>", data));
-    const body = sanitize(replaceTokens(tpl.body || "<p>{{guestName}}</p>", data));
-    const footer = sanitize(replaceTokens(tpl.footer || "", data));
-    openPrintWindow(`${header}<hr/>${body}<hr/>${footer}`);
+    // Include folio table in checkout print
+    const folio =
+      type === "checkOutTemplate"
+        ? `<table border="1" cellspacing="0" cellpadding="4" width="100%">
+            <thead><tr><th>Description</th><th style="text-align:right">Amount (${settings.currency || "IDR"})</th></tr></thead>
+            <tbody>${visiblePostings
+              .map(
+                (p) =>
+                  `<tr><td>${p.description || p.accountCode}</td><td style="text-align:right">${fmtMoney(
+                    p.amount
+                  )}</td></tr>`
+              )
+              .join("")}</tbody>
+            <tfoot>
+              <tr><th>Total</th><th style="text-align:right">${fmtMoney(chargesTotal)}</th></tr>
+              <tr><th>Payments</th><th style="text-align:right">-${fmtMoney(paymentsTotal)}</th></tr>
+              <tr><th>Balance</th><th style="text-align:right">${fmtMoney(balance)}</th></tr>
+            </tfoot>
+          </table>`
+        : "";
+
+    const html = `
+      <div style="font-family:sans-serif;padding:20px">
+        ${DOMPurify.sanitize(replaceTokens(tpl.header || "<h2>{{companyName}}</h2>", data))}
+        <hr/>
+        ${DOMPurify.sanitize(replaceTokens(tpl.body || "", data))}
+        ${folio}
+        <hr/>
+        ${DOMPurify.sanitize(replaceTokens(tpl.footer || "", data))}
+      </div>
+    `;
+    openPrintWindow(html);
   };
 
-  /** ============ HANDLERS ============ **/
-  const doCheckIn = async () => {
-    if (!reservation) return showMessage("Reservation not loaded", "error");
-    try {
-      await runTransaction(db, async (tx) => {
-        const ref = doc(db, "reservations", reservation.id);
-        const snap = await tx.get(ref);
-        if (!snap.exists()) throw new Error("Reservation not found");
-        const r = snap.data();
-        if ((r.status || "").toLowerCase() !== "booked")
-          throw new Error("Only booked reservations can be checked in");
-        tx.update(ref, {
-          status: "checked-in",
-          checkInDate: new Date().toISOString(),
-          updatedAt: serverTimestamp(),
-        });
-      });
-      showMessage("Checked in successfully", "success");
-    } catch (err) {
-      showMessage(err.message, "error");
-    }
-  };
-
-  const doCheckOut = async () => {
-    if (!reservation) return showMessage("Reservation not loaded", "error");
-    try {
-      await runTransaction(db, async (tx) => {
-        const ref = doc(db, "reservations", reservation.id);
-        const snap = await tx.get(ref);
-        if (!snap.exists()) throw new Error("Reservation not found");
-        const r = snap.data();
-        if ((r.status || "").toLowerCase() !== "checked-in")
-          throw new Error("Only checked-in reservations can be checked out");
-        tx.update(ref, {
-          status: "checked-out",
-          checkOutDate: new Date().toISOString(),
-          updatedAt: serverTimestamp(),
-        });
-      });
-      showMessage("Checked out successfully", "success");
-    } catch (err) {
-      showMessage(err.message, "error");
-    }
-  };
-
-  /** ============ RENDER ============ **/
+  /** ================= UI ================= */
   if (loading) return <div className="p-6 text-gray-500">Loading reservation...</div>;
   if (!reservation) return <div className="p-6 text-gray-500">Reservation not found.</div>;
 
@@ -239,44 +293,45 @@ export default function ReservationDetailA({ currentUser = null, permissions = [
     <div className="max-w-6xl mx-auto p-6">
       <h1 className="page-title">Reservation — {reservation.id}</h1>
 
-      {message && (
-        <div className={`toast toast-${message.type}`}>{message.text}</div>
-      )}
+      {message && <div className={`toast toast-${message.type}`}>{message.text}</div>}
 
       <ReservationDetailB
         reservation={reservation}
         guest={guest}
-        stays={stays}
         settings={settings}
-        canOperate={permissions.includes("canOperateFrontDesk") || permissions.includes("*")}
+        balance={balance}
+        canOperate={permissions.includes("*") || permissions.includes("canOperateFrontDesk")}
         doCheckIn={doCheckIn}
         doCheckOut={doCheckOut}
-        printCheckInForm={() => status !== "checked-out" && printTemplate("checkInTemplate")}
-        printCheckOutBill={() => status === "checked-out" && printTemplate("checkOutTemplate")}
-        balance={balance}
+        printCheckInForm={() =>
+          status !== "checked-out" && printTemplate("checkInTemplate")
+        }
+        printCheckOutBill={() =>
+          status === "checked-out" && printTemplate("checkOutTemplate")
+        }
       />
 
       <ReservationDetailC
         reservation={reservation}
         postings={postings}
         payments={payments}
-        currency={settings.currency}
+        submitCharge={submitCharge}
+        submitPayment={submitPayment}
+        currency={settings.currency || "IDR"}
         fmtMoney={fmtMoney}
       />
 
       <div className="log-card">
         <h3>Logs</h3>
-        <div className="log-list">
-          {logs.map((l) => (
-            <div key={l.id} className="log-entry">
-              <strong>{l.action}</strong> — {l.by} (
-              {l.createdAt?.seconds
-                ? new Date(l.createdAt.seconds * 1000).toLocaleString()
-                : "—"}
-              )
-            </div>
-          ))}
-        </div>
+        {logs.map((l) => (
+          <div key={l.id} className="log-entry">
+            <strong>{l.action}</strong> — {l.by} (
+            {l.createdAt?.seconds
+              ? new Date(l.createdAt.seconds * 1000).toLocaleString()
+              : "—"}
+            )
+          </div>
+        ))}
       </div>
     </div>
   );
