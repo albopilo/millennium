@@ -1,89 +1,68 @@
-.reservations-container {
-  font-family: Arial, sans-serif;
-  padding: 20px;
+.reservations-page {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 24px;
 }
 
-.reservation-form {
+.page-title {
+  font-size: 1.8rem;
+  margin-bottom: 16px;
+  color: #1e293b;
+}
+
+.reservation-form-wide {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.form-row {
   display: grid;
-  grid-template-columns: 150px 1fr;
-  gap: 10px 20px;
-  max-width: 600px;
-  margin-bottom: 30px;
-  background: #fafafa;
-  padding: 20px;
-  border-radius: 8px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
 }
 
-.reservation-form label {
+.room-selection {
+  overflow-x: auto;
+}
+
+.room-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.room-table th,
+.room-table td {
+  border: 1px solid #e2e8f0;
+  padding: 10px 14px;
+  text-align: left;
+}
+
+.room-table th {
+  background: #f8fafc;
+}
+
+.room-table tr:nth-child(even) {
+  background: #f9fafb;
+}
+
+.rate-summary input {
+  width: 100%;
+  padding: 8px;
   font-weight: bold;
-  align-self: center;
-}
-
-.reservation-form select,
-.reservation-form input {
-  padding: 6px;
-  border: 1px solid #ccc;
-  border-radius: 4px;
+  font-size: 1.1rem;
 }
 
 .form-actions {
-  grid-column: 1 / span 2;
-  text-align: right;
+  display: flex;
+  justify-content: flex-end;
 }
 
 .btn-primary {
-  background: #007bff;
-  color: #fff;
-  padding: 8px 16px;
+  padding: 10px 20px;
+  background: #2563eb;
+  color: white;
   border: none;
-  border-radius: 4px;
+  border-radius: 6px;
   cursor: pointer;
-}
-
-.btn-primary:disabled {
-  background: #ccc;
-  cursor: not-allowed;
-}
-
-.btn-danger {
-  background: #dc3545;
-  color: #fff;
-  padding: 4px 8px;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-}
-
-.reservations-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 14px;
-}
-
-.reservations-table th,
-.reservations-table td {
-  padding: 8px;
-  border: 1px solid #ddd;
-}
-
-.reservations-table thead {
-  background: #f0f0f0;
-}
-
-.row-even {
-  background: #fff;
-}
-
-.row-odd {
-  background: #f9f9f9;
-}
-
-.row-cancelled {
-  background: #ffe5e5;
-}
-
-.error {
-  grid-column: 1 / span 2;
-  color: red;
 }
