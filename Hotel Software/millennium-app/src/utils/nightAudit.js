@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 // src/utils/nightAudit.js
 import {
   collection,
@@ -12,646 +11,267 @@ import {
 } from "firebase/firestore";
 import { db } from "../firebase";
 
-/**
- * Helpers for Jakarta timezone (GMT+7)
- */
-function nowInTZ(offsetHours = 7) {
+/* ============================================================
+   🔧 TIMEZONE HELPERS (Jakarta / GMT+7)
+   ============================================================ */
+function nowInTZ(offset = 7) {
   const now = new Date();
-  const utcMs = now.getTime() + now.getTimezoneOffset() * 60000;
-  const tzMs = utcMs + offsetHours * 3600 * 1000;
-  return new Date(tzMs);
+  const utc = now.getTime() + now.getTimezoneOffset() * 60000;
+  return new Date(utc + offset * 3600 * 1000);
 }
 
-function startOfDayInTZ(d) {
-  const dt = new Date(d);
-  dt.setHours(0, 0, 0, 0);
-  return dt;
+function startOfDay(date) {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  return d;
 }
 
-function businessDayForRunTime(runDate = null, tzOffset = 7) {
-  const now = runDate ? new Date(runDate) : nowInTZ(tzOffset);
-  const hours = now.getHours();
-  if (hours < 4) {
-    const prev = new Date(now);
+function businessDayForRunTime(date = null, offset = 7) {
+  const current = date ? new Date(date) : nowInTZ(offset);
+  if (current.getHours() < 4) {
+    const prev = new Date(current);
     prev.setDate(prev.getDate() - 1);
-    return startOfDayInTZ(prev);
+    return startOfDay(prev);
   }
-  return startOfDayInTZ(now);
+  return startOfDay(current);
 }
 
-/**
- * Helper wrapper: safe reads with diagnostics
- */
+/* ============================================================
+   🛡️ SAFE FETCH WRAPPER
+   ============================================================ */
 async function safeGetDocs(collName, q = null) {
   try {
-    const snap = q
-      ? await getDocs(q)
-      : await getDocs(collection(db, collName));
+    const snap = q ? await getDocs(q) : await getDocs(collection(db, collName));
     return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
   } catch (err) {
-    console.error(`nightAudit: read failed for collection "${collName}"`, err);
-    throw err; // rethrow so runNightAudit sees permission problems
+    console.error(`[NightAudit] Failed to read "${collName}"`, err);
+    throw new Error(`Permission or read error for "${collName}"`);
   }
 }
 
-/**
- * runNightAudit
- */
-export async function runNightAudit({ runBy = "system", finalize = false, tzOffset = 7 } = {}) {
+/* ============================================================
+   🏨 MAIN NIGHT AUDIT FUNCTION
+   ============================================================ */
+export async function runNightAudit({
+  runBy = "system",
+  finalize = false,
+  tzOffset = 7,
+} = {}) {
   const runAt = nowInTZ(tzOffset);
   const businessDay = businessDayForRunTime(runAt, tzOffset);
   const businessDayStr = businessDay.toISOString().slice(0, 10);
 
-  let issues = [];
-  let roomsTotal = 0;
-  let roomsOccupied = 0;
-  let totalRoomRevenue = 0;
-  const channelCounts = {};
-  const roomTypeCounts = {};
+  const result = {
+    summary: {},
+    issues: [],
+  };
 
   try {
-    // Data loads
-    const rooms = await safeGetDocs("rooms");
-    const reservations = await safeGetDocs(
-      "reservations",
-      query(
-        collection(db, "reservations"),
-        where("status", "in", ["booked", "checked-in", "checked-out", "cancelled"])
-      )
-    );
-    const stays = await safeGetDocs("stays");
-    const postings = await safeGetDocs("postings");
-    const payments = await safeGetDocs("payments");
+    // Load core collections (read-only)
+    const [rooms, stays, reservations, postings, payments] = await Promise.all([
+      safeGetDocs("rooms"),
+      safeGetDocs("stays"),
+      safeGetDocs(
+        "reservations",
+        query(
+          collection(db, "reservations"),
+          where("status", "in", ["booked", "checked-in", "checked-out", "cancelled"])
+        )
+      ),
+      safeGetDocs("postings"),
+      safeGetDocs("payments"),
+    ]);
 
-    roomsTotal = rooms.length;
-    roomsOccupied = rooms.filter((r) => (r.status || "").toLowerCase() === "occupied").length;
+    const roomsTotal = rooms.length;
+    const roomsOccupied = rooms.filter((r) => (r.status || "").toLowerCase() === "occupied").length;
+    let totalRoomRevenue = 0;
+    const channelCounts = {};
+    const roomTypeCounts = [];
+    const issues = [];
 
-    // 1) Stays must link to reservation
-    for (const s of stays.filter((x) => (x.status || "").toLowerCase() === "open")) {
-      if (!s.reservationId) {
+    /* ================================
+       🔍 Validation 1: Stay consistency
+       ================================ */
+    for (const stay of stays.filter((x) => (x.status || "").toLowerCase() === "open")) {
+      if (!stay.reservationId) {
         issues.push({
           type: "stay_without_reservation",
-          message: `Open stay ${s.id} (${s.roomNumber}) missing reservationId`,
-          stayId: s.id,
+          message: `Stay ${stay.id} (${stay.roomNumber}) has no reservationId.`,
+          stayId: stay.id,
         });
-      } else {
-        const resExists = reservations.some((r) => r.id === s.reservationId);
-        if (!resExists) {
-          issues.push({
-            type: "stay_reservation_missing",
-            message: `Stay ${s.id} references missing reservation ${s.reservationId}`,
-            stayId: s.id,
-            reservationId: s.reservationId,
-          });
-        }
+        continue;
+      }
+      const resExists = reservations.some((r) => r.id === stay.reservationId);
+      if (!resExists) {
+        issues.push({
+          type: "stay_reservation_missing",
+          message: `Stay ${stay.id} references missing reservation ${stay.reservationId}.`,
+          stayId: stay.id,
+          reservationId: stay.reservationId,
+        });
       }
     }
 
-    // 2) Stays past checkout
+    /* =====================================
+       ⏰ Validation 2: Stays past checkout
+       ===================================== */
     for (const s of stays.filter((x) => (x.status || "").toLowerCase() === "open")) {
-      const rId = s.reservationId;
-      const res = reservations.find((rr) => rr.id === rId);
-      const checkOut = res?.checkOutDate
-        ? res.checkOutDate?.toDate
-          ? res.checkOutDate.toDate()
-          : new Date(res.checkOutDate)
+      const r = reservations.find((rr) => rr.id === s.reservationId);
+      const checkOut = r?.checkOutDate
+        ? r.checkOutDate.toDate ? r.checkOutDate.toDate() : new Date(r.checkOutDate)
         : null;
-      if (checkOut) {
-        if (checkOut < businessDay) {
-          issues.push({
-            type: "stay_past_checkout",
-            message: `Stay ${s.id} in room ${s.roomNumber} has check-out ${checkOut.toISOString().slice(0, 10)} < business day ${businessDayStr}`,
-            stayId: s.id,
-            reservationId: rId,
-            checkOut,
-          });
-        }
-      } else {
+      if (!checkOut) {
         issues.push({
           type: "stay_missing_checkout",
-          message: `Stay ${s.id} in room ${s.roomNumber} has no check-out date on reservation ${rId}`,
-          stayId: s.id,
-          reservationId: rId,
+          message: `Stay ${s.id} missing checkout on reservation ${r?.id || "unknown"}.`,
         });
+        continue;
       }
-    }
-
-    // 3) Reservations checked-in with old check-in date
-    for (const r of reservations.filter((x) => (x.status || "").toLowerCase() === "checked-in")) {
-      const inDate = r.checkInDate
-        ? r.checkInDate?.toDate
-          ? r.checkInDate.toDate()
-          : new Date(r.checkInDate)
-        : null;
-      if (inDate && inDate < businessDay) {
+      if (checkOut < businessDay) {
         issues.push({
-          type: "checked_in_with_past_checkin",
-          message: `Reservation ${r.id} is checked-in but has check-in ${inDate.toISOString().slice(0, 10)} < business day ${businessDayStr}`,
-          reservationId: r.id,
+          type: "stay_past_checkout",
+          message: `Stay ${s.id} (${s.roomNumber}) past checkout (${checkOut.toISOString().slice(0, 10)}).`,
+          checkOut,
         });
       }
     }
 
-    // 4) Reconcile postings & payments
-    const resMap = new Map(reservations.map((r) => [r.id, r]));
+    /* =======================================
+       🧾 Validation 3: Payment reconciliation
+       ======================================= */
     const postingsByRes = {};
     const paymentsByRes = {};
-
     for (const p of postings) {
-      if (!p.reservationId) continue;
-      postingsByRes[p.reservationId] = postingsByRes[p.reservationId] || [];
-      postingsByRes[p.reservationId].push(p);
+      if (p.reservationId)
+        (postingsByRes[p.reservationId] ||= []).push(p);
     }
     for (const p of payments) {
-      if (!p.reservationId) continue;
-      paymentsByRes[p.reservationId] = paymentsByRes[p.reservationId] || [];
-      paymentsByRes[p.reservationId].push(p);
+      if (p.reservationId)
+        (paymentsByRes[p.reservationId] ||= []).push(p);
     }
 
-    for (const [resId, r] of resMap) {
-      const posts = postingsByRes[resId] || [];
-      const pays = paymentsByRes[resId] || [];
+    for (const r of reservations) {
+      const posts = postingsByRes[r.id] || [];
+      const pays = paymentsByRes[r.id] || [];
       const postsTotal = posts.reduce(
-        (s, x) => s + Number(x.amount || 0) + Number(x.tax || 0) + Number(x.service || 0),
+        (sum, x) => sum + Number(x.amount || 0) + Number(x.tax || 0) + Number(x.service || 0),
         0
       );
-      const paysTotal = pays.reduce((s, x) => s + Number(x.amount || 0), 0);
+      const paysTotal = pays.reduce((sum, x) => sum + Number(x.amount || 0), 0);
 
       if (Math.abs(postsTotal - paysTotal) > 0.5 && (postsTotal > 0 || paysTotal > 0)) {
         issues.push({
           type: "payments_mismatch",
-          message: `Reservation ${resId} postings ${postsTotal} != payments ${paysTotal}`,
-          reservationId: resId,
-          postingsTotal: postsTotal,
-          paymentsTotal: paysTotal,
+          message: `Reservation ${r.id}: postings=${postsTotal}, payments=${paysTotal}`,
+          reservationId: r.id,
         });
       }
 
       totalRoomRevenue += postsTotal;
-      const ch = (r.channel || "direct").toLowerCase();
-      channelCounts[ch] = (channelCounts[ch] || 0) + 1;
+      const channel = (r.channel || "direct").toLowerCase();
+      channelCounts[channel] = (channelCounts[channel] || 0) + 1;
 
-      const firstRoom = Array.isArray(r.roomNumbers) ? (r.roomNumbers[0] || null) : r.roomNumber;
-      if (firstRoom) {
-        const roomDoc = rooms.find((rr) => rr.roomNumber === firstRoom);
-        const rt = roomDoc?.roomType || "unknown";
-        roomTypeCounts[rt] = (roomTypeCounts[rt] || 0) + 1;
+      const roomNum = Array.isArray(r.roomNumbers)
+        ? r.roomNumbers[0]
+        : r.roomNumber;
+      const roomType = rooms.find((x) => x.roomNumber === roomNum)?.roomType || "unknown";
+      roomTypeCounts[roomType] = (roomTypeCounts[roomType] || 0) + 1;
+    }
+
+    /* =========================================
+       🚪 Validation 4: Occupied rooms w/out stay
+       ========================================= */
+    for (const r of rooms.filter((x) => (x.status || "").toLowerCase() === "occupied")) {
+      const hasStay = stays.some(
+        (s) => s.roomNumber === r.roomNumber && (s.status || "").toLowerCase() === "open"
+      );
+      if (!hasStay) {
+        issues.push({
+          type: "room_occupied_without_stay",
+          message: `Room ${r.roomNumber} marked occupied but has no active stay.`,
+        });
       }
     }
 
-    // 5) No-shows
+    /* =========================================
+       ⏱️ Validation 5: No-shows
+       ========================================= */
     for (const r of reservations.filter((x) => (x.status || "").toLowerCase() === "booked")) {
       const inDate = r.checkInDate
-        ? r.checkInDate?.toDate
-          ? r.checkInDate.toDate()
-          : new Date(r.checkInDate)
+        ? r.checkInDate.toDate ? r.checkInDate.toDate() : new Date(r.checkInDate)
         : null;
       if (inDate && inDate < businessDay) {
         issues.push({
           type: "possible_noshow",
-          message: `Reservation ${r.id} with check-in ${inDate.toISOString().slice(0, 10)} is still booked (past business day).`,
-          reservationId: r.id,
+          message: `Reservation ${r.id} booked for ${inDate.toISOString().slice(0, 10)} still not checked in.`,
         });
       }
     }
 
-    // 6) Rooms occupied but no stay
-    for (const r of rooms.filter((x) => (x.status || "").toLowerCase() === "occupied")) {
-      const hasOpenStay = stays.some(
-        (s) => s.roomNumber === r.roomNumber && (s.status || "").toLowerCase() === "open"
-      );
-      if (!hasOpenStay) {
-        issues.push({
-          type: "room_occupied_without_stay",
-          message: `Room ${r.roomNumber} shows Occupied but no open stay found.`,
-          roomNumber: r.roomNumber,
-        });
-      }
-    }
-
-    // Load already noticed issues
-    const noticedSnap = await safeGetDocs(
-      "nightAuditIssues",
-      query(collection(db, "nightAuditIssues"), where("noticed", "==", true))
-    );
-    const noticedKeys = new Set(noticedSnap.map((d) => d.id));
-
-    const newIssues = issues.filter((issue) => {
-      const key = `${issue.type}:${issue.reservationId || issue.stayId || issue.roomNumber || "?"}`;
-      issue.issueKey = key;
-      return !noticedKeys.has(key);
-    });
-
+    /* =========================================
+       🧮 Summary Calculation
+       ========================================= */
     const summary = {
       runAt: runAt.toISOString(),
       businessDay: businessDayStr,
       roomsTotal,
       roomsOccupied,
-      occupancyPct: roomsTotal > 0 ? Math.round((roomsOccupied / roomsTotal) * 10000) / 100 : 0,
-      adr: roomsOccupied > 0 ? Math.round(totalRoomRevenue / roomsOccupied) : 0,
-      revpar: roomsTotal > 0 ? Math.round(totalRoomRevenue / roomsTotal) : 0,
+      occupancyPct: roomsTotal ? Math.round((roomsOccupied / roomsTotal) * 10000) / 100 : 0,
+      adr: roomsOccupied ? Math.round(totalRoomRevenue / roomsOccupied) : 0,
+      revpar: roomsTotal ? Math.round(totalRoomRevenue / roomsTotal) : 0,
       totalRoomRevenue: Math.round(totalRoomRevenue),
+      issuesCount: issues.length,
       channelCounts,
       roomTypeCounts,
-      issuesCount: newIssues.length,
     };
 
+    result.summary = summary;
+    result.issues = issues;
+
+    /* =========================================
+       🧱 Finalization (Write Logs & Issues)
+       ========================================= */
     if (finalize) {
+      const batch = writeBatch(db);
       const logRef = doc(db, "nightAuditLogs", businessDayStr);
       const snapshotRef = doc(db, "nightAuditSnapshots", businessDayStr);
-      const issueWrites = newIssues.map((issue) => ({
-        ref: doc(db, "nightAuditIssues", issue.issueKey),
-        data: {
-          ...issue,
+
+      batch.set(logRef, {
+        runAt,
+        runBy,
+        businessDay: businessDayStr,
+        summary,
+        issues,
+        createdAt: serverTimestamp(),
+      });
+
+      batch.set(snapshotRef, {
+        totals: {
+          rooms: roomsTotal,
+          reservations: reservations.length,
+          stays: stays.length,
+          postings: postings.length,
+          payments: payments.length,
+        },
+        createdAt: serverTimestamp(),
+      });
+
+      for (const i of issues) {
+        const key = `${i.type}:${i.reservationId || i.stayId || i.roomNumber}`;
+        batch.set(doc(db, "nightAuditIssues", key), {
+          ...i,
           businessDay: businessDayStr,
           noticed: false,
           createdAt: serverTimestamp(),
-        },
-      }));
-
-      try {
-        const batch = writeBatch(db);
-        batch.set(logRef, {
-          runAt: new Date(),
-          runBy,
-          businessDay: businessDayStr,
-          summary,
-          issues: newIssues,
-          createdAt: serverTimestamp(),
         });
-        batch.set(snapshotRef, {
-          roomsTotal,
-          roomsOccupied,
-          totalReservations: reservations.length,
-          totalStays: stays.length,
-          totalPostings: postings.length,
-          totalPayments: payments.length,
-          createdAt: serverTimestamp(),
-        });
-        for (const w of issueWrites) {
-          batch.set(w.ref, w.data, { merge: true });
-        }
-        await batch.commit();
-      } catch (batchErr) {
-        console.error("runNightAudit batch.commit failed:", batchErr);
-
-        await setDoc(logRef, {
-          runAt: new Date(),
-          runBy,
-          businessDay: businessDayStr,
-          summary,
-          issues: newIssues,
-          createdAt: serverTimestamp(),
-        });
-
-        await setDoc(snapshotRef, {
-          roomsTotal,
-          roomsOccupied,
-          totalReservations: reservations.length,
-          totalStays: stays.length,
-          totalPostings: postings.length,
-          totalPayments: payments.length,
-          createdAt: serverTimestamp(),
-        });
-
-        for (const w of issueWrites) {
-          await setDoc(w.ref, w.data, { merge: true });
-        }
       }
+
+      await batch.commit();
     }
 
-    return { issues: newIssues, summary };
+    return result;
   } catch (err) {
-    console.error("runNightAudit error:", err);
+    console.error("[NightAudit] Critical failure:", err);
     throw err;
   }
 }
-=======
-// src/utils/nightAudit.js
-import {
-  collection,
-  query,
-  where,
-  getDocs,
-  setDoc,
-  doc,
-  serverTimestamp,
-  writeBatch,
-} from "firebase/firestore";
-import { db } from "../firebase";
-
-/**
- * Helpers for Jakarta timezone (GMT+7)
- */
-function nowInTZ(offsetHours = 7) {
-  const now = new Date();
-  const utcMs = now.getTime() + now.getTimezoneOffset() * 60000;
-  const tzMs = utcMs + offsetHours * 3600 * 1000;
-  return new Date(tzMs);
-}
-
-function startOfDayInTZ(d) {
-  const dt = new Date(d);
-  dt.setHours(0, 0, 0, 0);
-  return dt;
-}
-
-function businessDayForRunTime(runDate = null, tzOffset = 7) {
-  const now = runDate ? new Date(runDate) : nowInTZ(tzOffset);
-  const hours = now.getHours();
-  if (hours < 4) {
-    const prev = new Date(now);
-    prev.setDate(prev.getDate() - 1);
-    return startOfDayInTZ(prev);
-  }
-  return startOfDayInTZ(now);
-}
-
-/**
- * Helper wrapper: safe reads with diagnostics
- */
-async function safeGetDocs(collName, q = null) {
-  try {
-    const snap = q
-      ? await getDocs(q)
-      : await getDocs(collection(db, collName));
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-  } catch (err) {
-    console.error(`nightAudit: read failed for collection "${collName}"`, err);
-    throw err; // rethrow so runNightAudit sees permission problems
-  }
-}
-
-/**
- * runNightAudit
- */
-export async function runNightAudit({ runBy = "system", finalize = false, tzOffset = 7 } = {}) {
-  const runAt = nowInTZ(tzOffset);
-  const businessDay = businessDayForRunTime(runAt, tzOffset);
-  const businessDayStr = businessDay.toISOString().slice(0, 10);
-
-  let issues = [];
-  let roomsTotal = 0;
-  let roomsOccupied = 0;
-  let totalRoomRevenue = 0;
-  const channelCounts = {};
-  const roomTypeCounts = {};
-
-  try {
-    // Data loads
-    const rooms = await safeGetDocs("rooms");
-    const reservations = await safeGetDocs(
-      "reservations",
-      query(
-        collection(db, "reservations"),
-        where("status", "in", ["booked", "checked-in", "checked-out", "cancelled"])
-      )
-    );
-    const stays = await safeGetDocs("stays");
-    const postings = await safeGetDocs("postings");
-    const payments = await safeGetDocs("payments");
-
-    roomsTotal = rooms.length;
-    roomsOccupied = rooms.filter((r) => (r.status || "").toLowerCase() === "occupied").length;
-
-    // 1) Stays must link to reservation
-    for (const s of stays.filter((x) => (x.status || "").toLowerCase() === "open")) {
-      if (!s.reservationId) {
-        issues.push({
-          type: "stay_without_reservation",
-          message: `Open stay ${s.id} (${s.roomNumber}) missing reservationId`,
-          stayId: s.id,
-        });
-      } else {
-        const resExists = reservations.some((r) => r.id === s.reservationId);
-        if (!resExists) {
-          issues.push({
-            type: "stay_reservation_missing",
-            message: `Stay ${s.id} references missing reservation ${s.reservationId}`,
-            stayId: s.id,
-            reservationId: s.reservationId,
-          });
-        }
-      }
-    }
-
-    // 2) Stays past checkout
-    for (const s of stays.filter((x) => (x.status || "").toLowerCase() === "open")) {
-      const rId = s.reservationId;
-      const res = reservations.find((rr) => rr.id === rId);
-      const checkOut = res?.checkOutDate
-        ? res.checkOutDate?.toDate
-          ? res.checkOutDate.toDate()
-          : new Date(res.checkOutDate)
-        : null;
-      if (checkOut) {
-        if (checkOut < businessDay) {
-          issues.push({
-            type: "stay_past_checkout",
-            message: `Stay ${s.id} in room ${s.roomNumber} has check-out ${checkOut.toISOString().slice(0, 10)} < business day ${businessDayStr}`,
-            stayId: s.id,
-            reservationId: rId,
-            checkOut,
-          });
-        }
-      } else {
-        issues.push({
-          type: "stay_missing_checkout",
-          message: `Stay ${s.id} in room ${s.roomNumber} has no check-out date on reservation ${rId}`,
-          stayId: s.id,
-          reservationId: rId,
-        });
-      }
-    }
-
-    // 3) Reservations checked-in with old check-in date
-    for (const r of reservations.filter((x) => (x.status || "").toLowerCase() === "checked-in")) {
-      const inDate = r.checkInDate
-        ? r.checkInDate?.toDate
-          ? r.checkInDate.toDate()
-          : new Date(r.checkInDate)
-        : null;
-      if (inDate && inDate < businessDay) {
-        issues.push({
-          type: "checked_in_with_past_checkin",
-          message: `Reservation ${r.id} is checked-in but has check-in ${inDate.toISOString().slice(0, 10)} < business day ${businessDayStr}`,
-          reservationId: r.id,
-        });
-      }
-    }
-
-    // 4) Reconcile postings & payments
-    const resMap = new Map(reservations.map((r) => [r.id, r]));
-    const postingsByRes = {};
-    const paymentsByRes = {};
-
-    for (const p of postings) {
-      if (!p.reservationId) continue;
-      postingsByRes[p.reservationId] = postingsByRes[p.reservationId] || [];
-      postingsByRes[p.reservationId].push(p);
-    }
-    for (const p of payments) {
-      if (!p.reservationId) continue;
-      paymentsByRes[p.reservationId] = paymentsByRes[p.reservationId] || [];
-      paymentsByRes[p.reservationId].push(p);
-    }
-
-    for (const [resId, r] of resMap) {
-      const posts = postingsByRes[resId] || [];
-      const pays = paymentsByRes[resId] || [];
-      const postsTotal = posts.reduce(
-        (s, x) => s + Number(x.amount || 0) + Number(x.tax || 0) + Number(x.service || 0),
-        0
-      );
-      const paysTotal = pays.reduce((s, x) => s + Number(x.amount || 0), 0);
-
-      if (Math.abs(postsTotal - paysTotal) > 0.5 && (postsTotal > 0 || paysTotal > 0)) {
-        issues.push({
-          type: "payments_mismatch",
-          message: `Reservation ${resId} postings ${postsTotal} != payments ${paysTotal}`,
-          reservationId: resId,
-          postingsTotal: postsTotal,
-          paymentsTotal: paysTotal,
-        });
-      }
-
-      totalRoomRevenue += postsTotal;
-      const ch = (r.channel || "direct").toLowerCase();
-      channelCounts[ch] = (channelCounts[ch] || 0) + 1;
-
-      const firstRoom = Array.isArray(r.roomNumbers) ? (r.roomNumbers[0] || null) : r.roomNumber;
-      if (firstRoom) {
-        const roomDoc = rooms.find((rr) => rr.roomNumber === firstRoom);
-        const rt = roomDoc?.roomType || "unknown";
-        roomTypeCounts[rt] = (roomTypeCounts[rt] || 0) + 1;
-      }
-    }
-
-    // 5) No-shows
-    for (const r of reservations.filter((x) => (x.status || "").toLowerCase() === "booked")) {
-      const inDate = r.checkInDate
-        ? r.checkInDate?.toDate
-          ? r.checkInDate.toDate()
-          : new Date(r.checkInDate)
-        : null;
-      if (inDate && inDate < businessDay) {
-        issues.push({
-          type: "possible_noshow",
-          message: `Reservation ${r.id} with check-in ${inDate.toISOString().slice(0, 10)} is still booked (past business day).`,
-          reservationId: r.id,
-        });
-      }
-    }
-
-    // 6) Rooms occupied but no stay
-    for (const r of rooms.filter((x) => (x.status || "").toLowerCase() === "occupied")) {
-      const hasOpenStay = stays.some(
-        (s) => s.roomNumber === r.roomNumber && (s.status || "").toLowerCase() === "open"
-      );
-      if (!hasOpenStay) {
-        issues.push({
-          type: "room_occupied_without_stay",
-          message: `Room ${r.roomNumber} shows Occupied but no open stay found.`,
-          roomNumber: r.roomNumber,
-        });
-      }
-    }
-
-    // Load already noticed issues
-    const noticedSnap = await safeGetDocs(
-      "nightAuditIssues",
-      query(collection(db, "nightAuditIssues"), where("noticed", "==", true))
-    );
-    const noticedKeys = new Set(noticedSnap.map((d) => d.id));
-
-    const newIssues = issues.filter((issue) => {
-      const key = `${issue.type}:${issue.reservationId || issue.stayId || issue.roomNumber || "?"}`;
-      issue.issueKey = key;
-      return !noticedKeys.has(key);
-    });
-
-    const summary = {
-      runAt: runAt.toISOString(),
-      businessDay: businessDayStr,
-      roomsTotal,
-      roomsOccupied,
-      occupancyPct: roomsTotal > 0 ? Math.round((roomsOccupied / roomsTotal) * 10000) / 100 : 0,
-      adr: roomsOccupied > 0 ? Math.round(totalRoomRevenue / roomsOccupied) : 0,
-      revpar: roomsTotal > 0 ? Math.round(totalRoomRevenue / roomsTotal) : 0,
-      totalRoomRevenue: Math.round(totalRoomRevenue),
-      channelCounts,
-      roomTypeCounts,
-      issuesCount: newIssues.length,
-    };
-
-    if (finalize) {
-      const logRef = doc(db, "nightAuditLogs", businessDayStr);
-      const snapshotRef = doc(db, "nightAuditSnapshots", businessDayStr);
-      const issueWrites = newIssues.map((issue) => ({
-        ref: doc(db, "nightAuditIssues", issue.issueKey),
-        data: {
-          ...issue,
-          businessDay: businessDayStr,
-          noticed: false,
-          createdAt: serverTimestamp(),
-        },
-      }));
-
-      try {
-        const batch = writeBatch(db);
-        batch.set(logRef, {
-          runAt: new Date(),
-          runBy,
-          businessDay: businessDayStr,
-          summary,
-          issues: newIssues,
-          createdAt: serverTimestamp(),
-        });
-        batch.set(snapshotRef, {
-          roomsTotal,
-          roomsOccupied,
-          totalReservations: reservations.length,
-          totalStays: stays.length,
-          totalPostings: postings.length,
-          totalPayments: payments.length,
-          createdAt: serverTimestamp(),
-        });
-        for (const w of issueWrites) {
-          batch.set(w.ref, w.data, { merge: true });
-        }
-        await batch.commit();
-      } catch (batchErr) {
-        console.error("runNightAudit batch.commit failed:", batchErr);
-
-        await setDoc(logRef, {
-          runAt: new Date(),
-          runBy,
-          businessDay: businessDayStr,
-          summary,
-          issues: newIssues,
-          createdAt: serverTimestamp(),
-        });
-
-        await setDoc(snapshotRef, {
-          roomsTotal,
-          roomsOccupied,
-          totalReservations: reservations.length,
-          totalStays: stays.length,
-          totalPostings: postings.length,
-          totalPayments: payments.length,
-          createdAt: serverTimestamp(),
-        });
-
-        for (const w of issueWrites) {
-          await setDoc(w.ref, w.data, { merge: true });
-        }
-      }
-    }
-
-    return { issues: newIssues, summary };
-  } catch (err) {
-    console.error("runNightAudit error:", err);
-    throw err;
-  }
-}
->>>>>>> 852bd5aea76e7ce24ddd98390edcaddee62d44d4
