@@ -2,369 +2,250 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  addDoc,
   collection,
+  doc,
   getDocs,
   getDoc,
+  addDoc,
   updateDoc,
-  doc,
   query,
   where,
   Timestamp,
 } from "firebase/firestore";
 import { db } from "../firebase";
-import "./Reservations.css";
+import useRequireNightAudit from "../hooks/useRequireNightAudit";
 import { checkRoomBlocks } from "../lib/availability";
 import { todayStr, ymd } from "../lib/dates";
-import useRequireNightAudit from "../hooks/useRequireNightAudit";
+import "./Reservations.css";
 
-function minCheckInDateForJakarta() {
-  // create a Date object in Asia/Jakarta timezone (GMT+7) as local time string
-  const nowJakarta = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Jakarta" }));
-  // if hotel's business day hasn't rolled past 04:00 local, allow yesterday
-  const allowYesterday = nowJakarta.getHours() < 4;
-  const dt = allowYesterday ? new Date(nowJakarta.getFullYear(), nowJakarta.getMonth(), nowJakarta.getDate() - 1) : new Date(nowJakarta.getFullYear(), nowJakarta.getMonth(), nowJakarta.getDate());
-  return ymd(dt); // uses your existing ymd function to format 'YYYY-MM-DD'
+/* ------------------ Utilities ------------------ */
+const JAKARTA_TZ = "Asia/Jakarta";
+
+function nowJakarta() {
+  return new Date(new Date().toLocaleString("en-US", { timeZone: JAKARTA_TZ }));
 }
 
+function minCheckInDate() {
+  const now = nowJakarta();
+  const allowYesterday = now.getHours() < 4;
+  const base = new Date(now);
+  if (allowYesterday) base.setDate(base.getDate() - 1);
+  return ymd(base);
+}
 
-export default function Reservations({ permissions = [], currentUser = null }) {
-  const can = (perm) => permissions.includes(perm) || permissions.includes("*");
-  const actor = currentUser?.id || currentUser?.email || "frontdesk";
-  const navigate = useNavigate();
+function showError(msg) {
+  alert(msg);
+}
 
-  // 🔹 Night audit hook
-  const { ready } = useRequireNightAudit(7);
-
-  // 🔹 ALL HOOKS AT THE TOP
-  const [rooms, setRooms] = useState([]);
-  const [channels, setChannels] = useState([]);
-  const [events, setEvents] = useState([]);
-  const [guests, setGuests] = useState([]);
-  const [depositPerRoom, setDepositPerRoom] = useState(0);
-  const [rates, setRates] = useState([]);
-
-  const [form, setForm] = useState({
-    guestName: "",
-    guestId: "",
-    checkInDate: todayStr(),
-    checkOutDate: (() => {
-      const d = new Date();
-      d.setDate(d.getDate() + 1);
-      return ymd(d);
-    })(),
-    roomNumbers: [],
-    channel: "",
-    rate: 0,
-    status: "booked",
+/* ------------------ Hooks ------------------ */
+function useReferenceData(ready) {
+  const [data, setData] = useState({
+    rooms: [],
+    channels: [],
+    guests: [],
+    events: [],
+    rates: [],
+    depositPerRoom: 0,
+    loading: true,
   });
 
-  const [errors, setErrors] = useState({});
-  const [birthdayApplied, setBirthdayApplied] = useState(false);
-
-  // 🔹 Selected guest memo
-  const selectedGuest = useMemo(() => {
-    return guests.find((g) => g.name === form.guestName) || null;
-  }, [guests, form.guestName]);
-
-  // 🔹 Room types memo
-  const roomTypes = useMemo(() => {
-    return Array.from(new Set(rooms.map((r) => r.roomType).filter(Boolean)));
-  }, [rooms]);
-
-  // 🔹 Load reference data
   useEffect(() => {
     if (!ready) return;
-
     (async () => {
       try {
-        const roomSnap = await getDocs(collection(db, "rooms"));
-        setRooms(roomSnap.docs.map((d) => d.data()));
+        const [rooms, channels, guests, events, rates, settings] = await Promise.all([
+          getDocs(collection(db, "rooms")),
+          getDocs(collection(db, "channels")),
+          getDocs(collection(db, "guests")),
+          getDocs(collection(db, "events")),
+          getDocs(collection(db, "rates")),
+          getDoc(doc(db, "settings", "general")),
+        ]);
 
-        const chanSnap = await getDocs(collection(db, "channels"));
-        setChannels(chanSnap.docs.map((d) => d.data()));
-
-        const eventSnap = await getDocs(collection(db, "events"));
-        setEvents(eventSnap.docs.map((d) => d.data()));
-
-        const guestSnap = await getDocs(collection(db, "guests"));
-        setGuests(
-          guestSnap.docs
-            .map((d) => ({ id: d.id, ...d.data() }))
-            .sort((a, b) => (a.name || "").localeCompare(b.name || ""))
-        );
-
-        const settingsSnap = await getDoc(doc(db, "settings", "general"));
-        if (settingsSnap.exists()) {
-          setDepositPerRoom(Number(settingsSnap.data().depositPerRoom || 0));
-        }
-
-        const ratesSnap = await getDocs(collection(db, "rates"));
-        setRates(
-          ratesSnap.docs.map((d) => ({
-            id: d.id,
-            ...d.data(),
-            roomType: (d.data().roomType || "").trim(),
-            channelId: (d.data().channelId || "").toLowerCase(),
-          }))
-        );
+        setData({
+          rooms: rooms.docs.map((d) => d.data()),
+          channels: channels.docs.map((d) => d.data()),
+          guests: guests.docs.map((d) => ({ id: d.id, ...d.data() })),
+          events: events.docs.map((d) => d.data()),
+          rates: rates.docs.map((d) => ({ id: d.id, ...d.data() })),
+          depositPerRoom: Number(settings.data()?.depositPerRoom || 0),
+          loading: false,
+        });
       } catch (err) {
-        console.error("Error loading reference data:", err);
+        console.error("Failed loading reference data:", err);
+        setData((prev) => ({ ...prev, loading: false }));
       }
     })();
   }, [ready]);
 
-  // 🔹 Helpers
-  const getEventForDate = (date) =>
-    events.find((ev) => {
-      const start = new Date(ev.startDate);
-      const end = new Date(ev.endDate);
-      return date >= start && date <= end;
-    });
+  return data;
+}
 
-  const rateFor = (roomType, channelName, date) => {
-    const channelId = (channelName || "").toLowerCase();
-    const rd = rates.find(
-      (r) =>
-        (r.roomType || "").trim() === (roomType || "").trim() &&
-        (r.channelId || "").toLowerCase() === channelId
-    );
-    if (!rd) return 0;
-
-    if (channelId === "direct") {
-      const day = date.getDay();
-      const isWeekend = day === 0 || day === 6;
-      return isWeekend ? Number(rd.weekendRate || 0) : Number(rd.weekdayRate || 0);
-    }
-    return Number(rd.price || 0);
-  };
-
-  function datesInStay(inStr, outStr) {
-    const start = new Date(inStr + "T00:00:00");
-    const end = new Date(outStr + "T00:00:00");
-    const list = [];
-    const cur = new Date(start);
-    while (cur < end) {
-      list.push(new Date(cur));
-      cur.setDate(cur.getDate() + 1);
-    }
-    return list;
-  }
-
-  function sameMonthDay(d1, d2) {
-    return d1.getMonth() === d2.getMonth() && d1.getDate() === d2.getDate();
-  }
-
-  // 🔹 Compute total rate (birthday/tier perks)
-  useEffect(() => {
-    if (!ready) return;
-    if (!form.channel || !form.roomNumbers.length || !form.checkInDate || !form.checkOutDate) return;
+/* ------------------ Core Logic ------------------ */
+function useRateCalculator({ rooms, events, rates, depositPerRoom }) {
+  const calc = (guest, form) => {
+    if (!form.roomNumbers.length || !form.channel || !form.checkInDate || !form.checkOutDate) return 0;
 
     const checkIn = new Date(form.checkInDate + "T00:00:00");
     const checkOut = new Date(form.checkOutDate + "T00:00:00");
-    if (!(checkOut > checkIn)) {
-      setErrors((prev) => ({ ...prev, date: "Check-out must be after check-in" }));
-      setForm((prev) => ({ ...prev, rate: 0 }));
-      return;
-    } else {
-      setErrors((prev) => ({ ...prev, date: null }));
+    if (!(checkOut > checkIn)) return 0;
+
+    const nights = [];
+    for (let d = new Date(checkIn); d < checkOut; d.setDate(d.getDate() + 1)) {
+      nights.push(new Date(d));
     }
 
-    const nights = datesInStay(form.checkInDate, form.checkOutDate);
-    let baseTotal = 0;
+    const rateFor = (roomType, channel, date) => {
+      const chId = (channel || "").toLowerCase();
+      const r = rates.find(
+        (x) => x.roomType?.trim() === roomType?.trim() && (x.channelId || "").toLowerCase() === chId
+      );
+      if (!r) return 0;
+      if (chId === "direct") {
+        const day = date.getDay();
+        const isWeekend = day === 0 || day === 6;
+        return isWeekend ? Number(r.weekendRate || 0) : Number(r.weekdayRate || 0);
+      }
+      return Number(r.price || 0);
+    };
 
-    let birthdayNight = null;
-    if (selectedGuest?.birthdate) {
-      const b = new Date(selectedGuest.birthdate);
-      birthdayNight = nights.find((n) => sameMonthDay(n, b)) || null;
-    }
+    const getEventRate = (date, roomType, baseRate) => {
+      const ev = events.find((ev) => {
+        const s = new Date(ev.startDate);
+        const e = new Date(ev.endDate);
+        return date >= s && date <= e;
+      });
+      if (ev && ev.rateType === "custom" && ev.customRates?.[roomType])
+        return ev.customRates[roomType];
+      return baseRate;
+    };
 
     const selectedRooms = form.roomNumbers
       .map((num) => rooms.find((r) => r.roomNumber === num))
       .filter(Boolean);
-    const anyDeluxe = selectedRooms.some((r) => (r.roomType || "").toLowerCase() === "deluxe");
-    const firstDeluxeRoom = selectedRooms.find(
-      (r) => (r.roomType || "").toLowerCase() === "deluxe"
-    );
 
-    for (const roomDoc of selectedRooms) {
+    let total = 0;
+    for (const room of selectedRooms) {
       for (const d of nights) {
-        const ev = getEventForDate(d);
-        let nightly = 0;
-        if (ev && ev.rateType === "custom" && ev.customRates) {
-          nightly = ev.customRates[roomDoc.roomType] ?? rateFor(roomDoc.roomType, form.channel, d);
-        } else {
-          nightly = rateFor(roomDoc.roomType, form.channel, d);
-        }
-        baseTotal += Number(nightly || 0);
+        const base = rateFor(room.roomType, form.channel, d);
+        total += getEventRate(d, room.roomType, base);
       }
     }
 
-    let tierDiscountPct = 0;
-    if ((form.channel || "").toLowerCase() === "direct" && selectedGuest?.tier) {
-      if (selectedGuest.tier === "Silver") tierDiscountPct = 0.05;
-      if (selectedGuest.tier === "Gold") tierDiscountPct = 0.1;
-    }
-    let discountedTotal = baseTotal * (1 - tierDiscountPct);
-
-    let birthdayExtraDiscount = 0;
-    let willMarkClaim = false;
-    if ((form.channel || "").toLowerCase() === "direct" && birthdayNight && selectedGuest) {
-      const year = new Date().getFullYear();
-      const alreadyClaimed = Number(selectedGuest.lastBirthdayClaimYear || 0) === year;
-
-      if (!alreadyClaimed) {
-        if (selectedGuest.tier === "Silver") {
-          const pickRoom = selectedRooms[0];
-          if (pickRoom) {
-            const ev = getEventForDate(birthdayNight);
-            let nightly = 0;
-            if (ev && ev.rateType === "custom" && ev.customRates) {
-              nightly =
-                ev.customRates[pickRoom.roomType] ?? rateFor(pickRoom.roomType, form.channel, birthdayNight);
-            } else {
-              nightly = rateFor(pickRoom.roomType, form.channel, birthdayNight);
-            }
-            birthdayExtraDiscount = Number(nightly || 0) * 0.5;
-            willMarkClaim = true;
-          }
-        } else if (selectedGuest.tier === "Gold" && anyDeluxe && firstDeluxeRoom) {
-          const ev = getEventForDate(birthdayNight);
-          let nightly = 0;
-          if (ev && ev.rateType === "custom" && ev.customRates) {
-            nightly =
-              ev.customRates[firstDeluxeRoom.roomType] ?? rateFor(firstDeluxeRoom.roomType, form.channel, birthdayNight);
-          } else {
-            nightly = rateFor(firstDeluxeRoom.roomType, form.channel, birthdayNight);
-          }
-          birthdayExtraDiscount = Number(nightly || 0);
-          willMarkClaim = true;
-        }
-      }
+    // Loyalty discount
+    let discount = 0;
+    if (guest?.tier && form.channel.toLowerCase() === "direct") {
+      if (guest.tier === "Silver") discount = 0.05;
+      if (guest.tier === "Gold") discount = 0.1;
     }
 
-    const total =
-      Math.max(0, discountedTotal - birthdayExtraDiscount) +
-      Number(depositPerRoom || 0) * form.roomNumbers.length;
+    total *= 1 - discount;
 
-    setForm((prev) => ({ ...prev, rate: Math.round(total) }));
-    setBirthdayApplied(willMarkClaim);
-  }, [form.channel, form.roomNumbers, form.checkInDate, form.checkOutDate, rooms, events, depositPerRoom, rates, selectedGuest, ready]);
-
-  // 🔹 Availability check function
-  const isRoomAvailable = async (roomNumber, checkInDate, checkOutDate) => {
-    const qRooms = query(
-      collection(db, "reservations"),
-      where("roomNumbers", "array-contains", roomNumber),
-      where("status", "in", ["booked", "checked-in"])
-    );
-    const snapshot = await getDocs(qRooms);
-    return snapshot.docs.every((docSnap) => {
-      const r = docSnap.data();
-      const existingIn = r.checkInDate?.toDate ? r.checkInDate.toDate() : new Date(r.checkInDate);
-      const existingOut = r.checkOutDate?.toDate ? r.checkOutDate.toDate() : new Date(r.checkOutDate);
-      const inDate = new Date(checkInDate + "T00:00:00");
-      const outDate = new Date(checkOutDate + "T00:00:00");
-      return outDate <= existingIn || inDate >= existingOut;
-    });
+    // Deposit
+    total += depositPerRoom * form.roomNumbers.length;
+    return Math.round(total);
   };
 
-  // 🔹 Handle form submission
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (!can("canCreateReservations")) return;
+  return { calc };
+}
 
-    if (!form.guestName.trim()) {
-      window.alert("Guest is required.");
-      return;
-    }
-    if (!form.checkInDate || !form.checkOutDate) {
-      window.alert("Both check-in and check-out dates are required.");
-      return;
-    }
+/* ------------------ Reservation Page ------------------ */
+export default function Reservations({ permissions = [], currentUser = null }) {
+  const can = (p) => permissions.includes(p) || permissions.includes("*");
+  const actor = currentUser?.id || currentUser?.email || "frontdesk";
+  const navigate = useNavigate();
+  const { ready } = useRequireNightAudit(7);
+  const { rooms, channels, guests, events, rates, depositPerRoom, loading } = useReferenceData(ready);
+  const { calc } = useRateCalculator({ rooms, events, rates, depositPerRoom });
 
-    const inDateLocal = new Date(form.checkInDate + "T00:00:00");
-    const outDateLocal = new Date(form.checkOutDate + "T00:00:00");
-    if (!(outDateLocal > inDateLocal)) {
-      window.alert("Check-out must be after check-in.");
-      return;
-    }
+  const [form, setForm] = useState({
+    guestId: "",
+    guestName: "",
+    checkInDate: todayStr(),
+    checkOutDate: ymd(new Date(Date.now() + 86400000)),
+    roomNumbers: [],
+    channel: "",
+    rate: 0,
+  });
 
-    const { blocked, conflicts } = await checkRoomBlocks(
-      form.roomNumbers,
-      inDateLocal,
-      outDateLocal
-    );
-    if (blocked) {
-      window.alert(
-        "Cannot create reservation. The following rooms are blocked:\n" +
-          conflicts.map((c) => `${c.roomNumber || c.roomType} (${c.reason})`).join("\n")
+  const selectedGuest = useMemo(
+    () => guests.find((g) => g.name === form.guestName) || null,
+    [guests, form.guestName]
+  );
+
+  // Auto recalc rate
+  useEffect(() => {
+    if (ready && !loading) {
+      const rate = calc(selectedGuest, form);
+      setForm((prev) => ({ ...prev, rate }));
+    }
+  }, [form.channel, form.roomNumbers, form.checkInDate, form.checkOutDate, selectedGuest, ready, loading]);
+
+  async function validate(form) {
+    const inDate = new Date(form.checkInDate + "T00:00:00");
+    const outDate = new Date(form.checkOutDate + "T00:00:00");
+    if (!form.guestName.trim()) throw new Error("Guest name required");
+    if (!(outDate > inDate)) throw new Error("Check-out must be after check-in");
+
+    const { blocked, conflicts } = await checkRoomBlocks(form.roomNumbers, inDate, outDate);
+    if (blocked)
+      throw new Error("Blocked rooms: " + conflicts.map((c) => c.roomNumber).join(", "));
+
+    for (const room of form.roomNumbers) {
+      const qRooms = query(
+        collection(db, "reservations"),
+        where("roomNumbers", "array-contains", room),
+        where("status", "in", ["booked", "checked-in"])
       );
-      return;
+      const snap = await getDocs(qRooms);
+      const overlap = snap.docs.some((d) => {
+        const r = d.data();
+        const exIn = r.checkInDate?.toDate ? r.checkInDate.toDate() : new Date(r.checkInDate);
+        const exOut = r.checkOutDate?.toDate ? r.checkOutDate.toDate() : new Date(r.checkOutDate);
+        return !(outDate <= exIn || inDate >= exOut);
+      });
+      if (overlap) throw new Error(`Room ${room} is already booked`);
     }
+  }
 
-    for (const roomNumber of form.roomNumbers) {
-      const available = await isRoomAvailable(roomNumber, form.checkInDate, form.checkOutDate);
-      if (!available) {
-        window.alert(`Room ${roomNumber} is already booked for those dates.`);
-        return;
-      }
-    }
-
-    const data = {
-      status: "booked",
-      guestId: selectedGuest?.id || null,
-      guestName: form.guestName.trim(),
-      channel: form.channel,
-      checkInDate: Timestamp.fromDate(inDateLocal),
-      checkOutDate: Timestamp.fromDate(outDateLocal),
-      roomNumbers: [...form.roomNumbers],
-      rate: Number(form.rate || 0),
-      depositPerRoom: Number(depositPerRoom || 0),
-      paymentMade: 0,
-      createdAt: new Date(),
-      createdBy: actor,
-    };
-
+  async function handleSubmit(e) {
+    e.preventDefault();
     try {
-      const ref = await addDoc(collection(db, "reservations"), data);
+      if (!can("canCreateReservations")) throw new Error("No permission");
+      await validate(form);
 
-      if (birthdayApplied && selectedGuest?.id) {
-        const year = new Date().getFullYear();
-        try {
-          await updateDoc(doc(db, "guests", selectedGuest.id), {
-            lastBirthdayClaimYear: year,
-          });
-        } catch (err) {
-          console.error("Failed to update guest birthday claim:", err);
-        }
-      }
+      const inDate = new Date(form.checkInDate + "T00:00:00");
+      const outDate = new Date(form.checkOutDate + "T00:00:00");
+
+      const ref = await addDoc(collection(db, "reservations"), {
+        ...form,
+        guestId: selectedGuest?.id || null,
+        checkInDate: Timestamp.fromDate(inDate),
+        checkOutDate: Timestamp.fromDate(outDate),
+        createdAt: new Date(),
+        createdBy: actor,
+        status: "booked",
+      });
 
       navigate(`/reservations/${ref.id}`);
     } catch (err) {
-      window.alert(err.message || String(err));
+      showError(err.message || String(err));
     }
-  };
+  }
 
-  // 🔹 Early return UI for Night Audit
-  if (!ready) {
+  if (!ready)
     return (
       <div>
-        <h3>Night Audit required</h3>
-        <p>
-          Night Audit for the business day has not been completed. Please run
-          Night Audit before performing reservation, check-in, or check-out operations.
-        </p>
+        <h3>Night Audit Required</h3>
         <button onClick={() => navigate("/night-audit")}>Run Night Audit</button>
       </div>
     );
-  }
 
-  // 🔹 Render form
+  if (loading) return <p>Loading reference data...</p>;
+
   return (
     <div className="reservations-container">
-      <h2>Add Reservation</h2>
-
+      <h2>Create Reservation</h2>
       <form onSubmit={handleSubmit} className="reservation-form">
         <label>Guest</label>
         <select
@@ -372,88 +253,55 @@ export default function Reservations({ permissions = [], currentUser = null }) {
           onChange={(e) => {
             const name = e.target.value;
             const g = guests.find((x) => x.name === name);
-            setForm((prev) => ({ ...prev, guestName: name, guestId: g?.id || "" }));
+            setForm((f) => ({ ...f, guestName: name, guestId: g?.id || "" }));
           }}
-          required
         >
           <option value="">Select Guest</option>
           {guests.map((g) => (
-            <option
-              key={g.id}
-              value={g.name}
-              title={g.benefits?.length ? g.benefits.join(", ") : ""}
-            >
+            <option key={g.id} value={g.name}>
               {g.name} {g.tier ? `(${g.tier})` : ""}
             </option>
           ))}
         </select>
 
-        <label>Dates</label>
-        <div style={{ display: "flex", gap: 8 }}>
-          <div>
-            <div style={{ fontSize: 12, color: "#64748b" }}>Check-in</div>
-            <input
-              type="date"
-              min={minCheckInDateForJakarta()}
-              value={form.checkInDate}
-              onChange={(e) => {
-                const v = e.target.value;
-                setForm((prev) => ({
-                  ...prev,
-                  checkInDate: v,
-                  checkOutDate:
-                    prev.checkOutDate && prev.checkOutDate <= v
-                      ? ymd(new Date(new Date(v).setDate(new Date(v).getDate() + 1)))
-                      : prev.checkOutDate,
-                }));
-              }}
-              required
-            />
-          </div>
-          <div>
-            <div style={{ fontSize: 12, color: "#64748b" }}>Check-out</div>
-            <input
-              type="date"
-              min={form.checkInDate || minCheckInDateForJakarta()}
-              value={form.checkOutDate}
-              onChange={(e) =>
-                setForm((prev) => ({ ...prev, checkOutDate: e.target.value }))
-              }
-              required
-            />
-          </div>
-        </div>
-        {errors.date && <div className="error">{errors.date}</div>}
+        <label>Check-in</label>
+        <input
+          type="date"
+          min={minCheckInDate()}
+          value={form.checkInDate}
+          onChange={(e) => setForm((f) => ({ ...f, checkInDate: e.target.value }))}
+        />
+
+        <label>Check-out</label>
+        <input
+          type="date"
+          min={form.checkInDate}
+          value={form.checkOutDate}
+          onChange={(e) => setForm((f) => ({ ...f, checkOutDate: e.target.value }))}
+        />
 
         <label>Rooms</label>
         <select
           multiple
-          style={{ width: "100%", minHeight: "180px" }}
           value={form.roomNumbers}
           onChange={(e) =>
-            setForm({
-              ...form,
+            setForm((f) => ({
+              ...f,
               roomNumbers: Array.from(e.target.selectedOptions, (opt) => opt.value),
-            })
+            }))
           }
-          required
         >
           {rooms.map((r) => (
             <option key={r.roomNumber} value={r.roomNumber}>
-              {r.roomNumber} ({r.roomType || "—"}) {r.status ? `[${r.status}]` : ""}
+              {r.roomNumber} ({r.roomType})
             </option>
           ))}
         </select>
 
-        <div className="helper-text">
-          Room types available: {roomTypes.join(", ") || "—"}
-        </div>
-
         <label>Channel</label>
         <select
           value={form.channel}
-          onChange={(e) => setForm({ ...form, channel: e.target.value })}
-          required
+          onChange={(e) => setForm((f) => ({ ...f, channel: e.target.value }))}
         >
           <option value="">Select Channel</option>
           {channels.map((c) => (
@@ -463,30 +311,12 @@ export default function Reservations({ permissions = [], currentUser = null }) {
           ))}
         </select>
 
-        <label>Total Amount (includes deposit)</label>
+        <label>Total</label>
         <input type="number" value={form.rate} readOnly />
-        <div className="helper-text">
-          Deposit per room: {Number(depositPerRoom || 0).toLocaleString()} ×{" "}
-          {form.roomNumbers.length} room(s)
-        </div>
 
-        <div className="form-actions" style={{ marginTop: 8 }}>
-          <button
-            type="submit"
-            disabled={
-              !can("canCreateReservations") ||
-              !form.guestName ||
-              !form.checkInDate ||
-              !form.checkOutDate ||
-              !form.roomNumbers.length ||
-              !form.channel ||
-              !!errors.date
-            }
-            className="btn-primary"
-          >
-            Save & open details
-          </button>
-        </div>
+        <button type="submit" className="btn-primary">
+          Save & Open
+        </button>
       </form>
     </div>
   );
