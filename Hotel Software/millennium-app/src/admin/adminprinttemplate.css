@@ -1,0 +1,64 @@
+.print-template-container {
+  max-width: 900px;
+  margin: 30px auto;
+  background: #fff;
+  padding: 24px;
+  border-radius: 8px;
+  box-shadow: 0 0 10px rgba(0,0,0,0.1);
+}
+
+.template-tabs {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.template-tabs button {
+  padding: 8px 16px;
+  border: 1px solid #ccc;
+  background: #f9f9f9;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.template-tabs button.active {
+  background: #2563eb;
+  color: white;
+  border-color: #2563eb;
+}
+
+.template-editor label {
+  display: block;
+  font-weight: 600;
+  margin-top: 12px;
+}
+
+.template-editor input,
+.template-editor textarea {
+  width: 100%;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  padding: 8px;
+  margin-top: 4px;
+  font-size: 14px;
+}
+
+.template-preview {
+  margin-top: 24px;
+}
+
+.preview-box {
+  border: 1px solid #ddd;
+  background: #fdfdfd;
+  padding: 16px;
+  border-radius: 4px;
+  min-height: 160px;
+}
+
+.placeholder-help {
+  margin-top: 20px;
+  background: #f7f9ff;
+  padding: 12px;
+  border-radius: 4px;
+  font-size: 13px;
+}
