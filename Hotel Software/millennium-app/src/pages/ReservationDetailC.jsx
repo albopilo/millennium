@@ -3,35 +3,6 @@ import React, { useMemo } from "react";
 import "../styles/ReservationDetail.css";
 
 export default function ReservationDetailC(props) {
-  const {
-    reservation,
-    displayChargeLines = [],
-    displayChargesTotal = 0,
-    displayPaymentsTotal = 0,
-    displayBalance = 0,
-    currency = "IDR",
-    fmtMoney = (n) => (isNaN(n) ? "-" : Number(n).toLocaleString("id-ID")),
-    showAddCharge,
-    setShowAddCharge,
-    chargeForm,
-    setChargeForm,
-    submitCharge,
-    showAddPayment,
-    setShowAddPayment,
-    paymentForm,
-    setPaymentForm,
-    submitPayment,
-    canOperate,
-    fmt = (d) => (d ? new Date(d).toLocaleString() : "-"),
-    postings = [],
-    payments = [],
-    guest,
-    logReservationChange = () => {},
-    isAdmin,
-    printCheckInForm = null,
-    printCheckOutBill = null,
-  } = props;
-
   const roomLines = useMemo(() => {
     // Infer per-room postings if postings include ROOM entries
     const roomPostings = (postings || []).filter(p => ((p.accountCode || "") + "").toUpperCase() === "ROOM" && ((p.status || "") + "").toLowerCase() !== "void");
