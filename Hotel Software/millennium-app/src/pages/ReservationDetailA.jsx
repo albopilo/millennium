@@ -584,23 +584,4 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
     printCheckInForm,
     printCheckOutBill,
   };
-
-  return (
-    <div className="max-w-6xl mx-auto p-6 space-y-6">
-      <h2 className="text-2xl font-bold text-gray-800">Reservation Detail</h2>
-
-      <ReservationDetailB {...childProps}>
-        <ReservationDetailC
-          reservation={reservation}
-          displayChargeLines={displayChargeLines}
-          displayChargesTotal={displayChargesTotal}
-          displayPaymentsTotal={displayPaymentsTotal}
-          displayBalance={displayBalance}
-          currency={currency}
-          fmtMoney={fmtMoney}
-          {...childProps}
-        />
-      </ReservationDetailB>
-    </div>
-  );
 }
