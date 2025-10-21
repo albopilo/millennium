@@ -17,23 +17,18 @@ import { todayStr, ymd } from "../lib/dates";
 import useRequireNightAudit from "../hooks/useRequireNightAudit";
 import "./Reservations.css";
 
-/* ------------------ Helpers ------------------ */
+/* ---------- Helpers ---------- */
 const JAKARTA_TZ = "Asia/Jakarta";
-const formatDate = (date) => ymd(date);
-
-function nowInJakarta() {
-  return new Date(new Date().toLocaleString("en-US", { timeZone: JAKARTA_TZ }));
-}
-
-function minCheckInDateJakarta() {
+const formatDate = (d) => ymd(d);
+const nowInJakarta = () => new Date(new Date().toLocaleString("en-US", { timeZone: JAKARTA_TZ }));
+const minCheckInDateJakarta = () => {
   const now = nowInJakarta();
   const allowYesterday = now.getHours() < 4;
-  const base = new Date(now);
-  if (allowYesterday) base.setDate(base.getDate() - 1);
-  return ymd(base);
-}
+  if (allowYesterday) now.setDate(now.getDate() - 1);
+  return ymd(now);
+};
 
-/* ------------------ Main Component ------------------ */
+/* ---------- Component ---------- */
 export default function Reservations({ permissions = [], currentUser = null }) {
   const navigate = useNavigate();
   const { ready } = useRequireNightAudit(7);
@@ -41,7 +36,16 @@ export default function Reservations({ permissions = [], currentUser = null }) {
   const can = (perm) => permissions.includes(perm) || permissions.includes("*");
   const actor = currentUser?.email || currentUser?.id || "frontdesk";
 
-  /* ---------- State ---------- */
+  /* ---------- States ---------- */
+  const [rooms, setRooms] = useState([]);
+  const [guests, setGuests] = useState([]);
+  const [channels, setChannels] = useState([]);
+  const [rates, setRates] = useState([]);
+  const [events, setEvents] = useState([]);
+  const [depositPerRoom, setDepositPerRoom] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [guestSearch, setGuestSearch] = useState("");
+
   const [form, setForm] = useState({
     guestName: "",
     guestId: "",
@@ -52,13 +56,15 @@ export default function Reservations({ permissions = [], currentUser = null }) {
     rate: 0,
   });
 
-  const [rooms, setRooms] = useState([]);
-  const [guests, setGuests] = useState([]);
-  const [channels, setChannels] = useState([]);
-  const [rates, setRates] = useState([]);
-  const [events, setEvents] = useState([]);
-  const [depositPerRoom, setDepositPerRoom] = useState(0);
-  const [loading, setLoading] = useState(true);
+  const selectedChannel = useMemo(
+    () => channels.find((c) => c.name === form.channel) || null,
+    [channels, form.channel]
+  );
+
+  const selectedGuest = useMemo(
+    () => guests.find((g) => g.name === form.guestName),
+    [guests, form.guestName]
+  );
 
   /* ---------- Load Data ---------- */
   useEffect(() => {
@@ -89,17 +95,12 @@ export default function Reservations({ permissions = [], currentUser = null }) {
     })();
   }, [ready]);
 
-  const selectedGuest = useMemo(
-    () => guests.find((g) => g.name === form.guestName),
-    [guests, form.guestName]
-  );
-
-  /* ---------- Helpers ---------- */
+  /* ---------- Pricing ---------- */
   const rateFor = (roomType, channel, date) => {
     const chId = (channel || "").toLowerCase();
     const rateDoc = rates.find(
       (r) =>
-        r.roomType?.toLowerCase() === roomType?.toLowerCase() &&
+        (r.roomType || "").toLowerCase() === (roomType || "").toLowerCase() &&
         (r.channelId || "").toLowerCase() === chId
     );
     if (!rateDoc) return 0;
@@ -112,8 +113,9 @@ export default function Reservations({ permissions = [], currentUser = null }) {
   };
 
   const calcRate = () => {
-    if (!form.checkInDate || !form.checkOutDate || !form.roomNumbers.length || !form.channel)
+    if (!form.channel || !form.checkInDate || !form.checkOutDate || !form.roomNumbers.length)
       return 0;
+    if (selectedChannel?.rateType === "custom") return form.rate; // manual override
 
     const start = new Date(form.checkInDate + "T00:00:00");
     const end = new Date(form.checkOutDate + "T00:00:00");
@@ -128,27 +130,36 @@ export default function Reservations({ permissions = [], currentUser = null }) {
     for (const num of form.roomNumbers) {
       const room = rooms.find((r) => r.roomNumber === num);
       if (!room) continue;
-
       for (const date of nights) {
-        const rate = rateFor(room.roomType, form.channel, date);
-        total += rate;
+        total += rateFor(room.roomType, form.channel, date);
       }
     }
 
-    if (selectedGuest?.tier === "Silver" && form.channel.toLowerCase() === "direct")
-      total *= 0.95;
-    if (selectedGuest?.tier === "Gold" && form.channel.toLowerCase() === "direct")
-      total *= 0.9;
+    // Tier discount for direct guests
+    if ((form.channel || "").toLowerCase() === "direct") {
+      if (selectedGuest?.tier === "Silver") total *= 0.95;
+      if (selectedGuest?.tier === "Gold") total *= 0.9;
+    }
 
     total += depositPerRoom * form.roomNumbers.length;
     return Math.round(total);
   };
 
   useEffect(() => {
-    if (!loading && ready) setForm((f) => ({ ...f, rate: calcRate() }));
-  }, [form.roomNumbers, form.checkInDate, form.checkOutDate, form.channel, selectedGuest, ready, loading]);
+    if (!loading && ready && selectedChannel?.rateType !== "custom") {
+      setForm((f) => ({ ...f, rate: calcRate() }));
+    }
+  }, [
+    form.roomNumbers,
+    form.checkInDate,
+    form.checkOutDate,
+    form.channel,
+    selectedGuest,
+    ready,
+    loading,
+  ]);
 
-  /* ---------- Validation ---------- */
+  /* ---------- Availability ---------- */
   const isRoomAvailable = async (roomNumber, checkInDate, checkOutDate) => {
     const qRooms = query(
       collection(db, "reservations"),
@@ -171,7 +182,6 @@ export default function Reservations({ permissions = [], currentUser = null }) {
     e.preventDefault();
     try {
       if (!can("canCreateReservations")) throw new Error("Permission denied.");
-
       if (!form.guestName) throw new Error("Guest is required.");
       if (!form.channel) throw new Error("Channel is required.");
       if (!form.roomNumbers.length) throw new Error("Select at least one room.");
@@ -198,7 +208,7 @@ export default function Reservations({ permissions = [], currentUser = null }) {
         checkInDate: Timestamp.fromDate(inDate),
         checkOutDate: Timestamp.fromDate(outDate),
         roomNumbers: [...form.roomNumbers],
-        rate: form.rate,
+        rate: Number(form.rate || 0),
         depositPerRoom,
         paymentMade: 0,
         createdAt: new Date(),
@@ -213,28 +223,42 @@ export default function Reservations({ permissions = [], currentUser = null }) {
     }
   }
 
-  /* ---------- Early Return ---------- */
+  /* ---------- UI ---------- */
   if (!ready)
     return (
       <div className="night-audit-warning">
         <h3>Night Audit Required</h3>
-        <p>Night Audit must be completed before creating new reservations.</p>
+        <p>Complete Night Audit before creating new reservations.</p>
         <button onClick={() => navigate("/night-audit")}>Run Night Audit</button>
       </div>
     );
 
-  if (loading) return <p style={{ textAlign: "center" }}>Loading data...</p>;
+  if (loading) return <p>Loading...</p>;
 
-  /* ---------- UI ---------- */
+  /* ---------- Guest Filter ---------- */
+  const filteredGuests = guests.filter((g) =>
+    g.name.toLowerCase().includes(guestSearch.toLowerCase())
+  );
+
+  /* ---------- Render ---------- */
   return (
     <div className="reservations-page">
       <h1 className="page-title">Create Reservation</h1>
 
       <form className="reservation-form-wide" onSubmit={handleSubmit}>
-        {/* Guest & Dates */}
         <div className="form-row">
-          <div className="form-group">
-            <label>Guest</label>
+          <div className="form-group full">
+            <label>Search Guest</label>
+            <input
+              type="text"
+              placeholder="Type guest name..."
+              value={guestSearch}
+              onChange={(e) => setGuestSearch(e.target.value)}
+            />
+          </div>
+
+          <div className="form-group full">
+            <label>Select Guest</label>
             <select
               value={form.guestName}
               onChange={(e) => {
@@ -244,7 +268,7 @@ export default function Reservations({ permissions = [], currentUser = null }) {
               }}
             >
               <option value="">Select Guest</option>
-              {guests.map((g) => (
+              {filteredGuests.map((g) => (
                 <option key={g.id} value={g.name}>
                   {g.name} {g.tier ? `(${g.tier})` : ""}
                 </option>
@@ -290,7 +314,7 @@ export default function Reservations({ permissions = [], currentUser = null }) {
               <option value="">Select Channel</option>
               {channels.map((c) => (
                 <option key={c.name} value={c.name}>
-                  {c.name}
+                  {c.name} {c.rateType ? `(${c.rateType})` : ""}
                 </option>
               ))}
             </select>
@@ -342,10 +366,20 @@ export default function Reservations({ permissions = [], currentUser = null }) {
           </table>
         </div>
 
-        {/* Rate Summary */}
+        {/* Rate */}
         <div className="rate-summary">
-          <label>Total Amount (includes deposit)</label>
-          <input type="number" readOnly value={form.rate} />
+          <label>
+            Total Amount {selectedChannel?.rateType === "custom" ? "(editable for OTA)" : ""}
+          </label>
+          <input
+            type="number"
+            value={form.rate}
+            readOnly={selectedChannel?.rateType !== "custom"}
+            onChange={(e) =>
+              selectedChannel?.rateType === "custom" &&
+              setForm((prev) => ({ ...prev, rate: Number(e.target.value) }))
+            }
+          />
           <small>
             Deposit per room: {depositPerRoom.toLocaleString()} × {form.roomNumbers.length} room(s)
           </small>
