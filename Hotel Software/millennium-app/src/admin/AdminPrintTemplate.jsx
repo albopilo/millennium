@@ -1,174 +1,279 @@
-// src/admin/AdminPrintTemplate.jsx
-import React, { useState, useEffect } from "react";
-import { doc, getDoc, setDoc } from "firebase/firestore";
-import { db } from "../firebase";
-import "./adminprinttemplate.css";
+import React, { useEffect, useState } from "react";
+import DOMPurify from "dompurify";
+import {
+  doc,
+  getDoc,
+  setDoc,
+  addDoc,
+  collection,
+  serverTimestamp,
+} from "firebase/firestore";
+import { db, auth } from "../firebase";
+import "../styles/ReservationDetail.css";
 
-export default function AdminPrintTemplate({ permissions }) {
-  const [activeTab, setActiveTab] = useState("checkIn");
-  const [templateData, setTemplateData] = useState({
-    checkInTemplate: {
-      header: "MILLENNIUM INN",
-      body: "<p>Welcome {{guestName}} to Millennium Inn.<br/>Your room number is {{roomNumber}}.</p>",
-      footer: "<p>Signature: ______________________</p>",
-    },
-    checkOutTemplate: {
-      header: "MILLENNIUM INN",
-      body: "<p>Thank you {{guestName}} for staying with us.<br/>Your total balance is {{balance}}.</p>",
-      footer: "<p>Signature: ______________________</p>",
-    },
-  });
+/**
+ * AdminPrintTemplate
+ * - Manage check-in / check-out printable templates
+ * - Uses version history in settings/printTemplates/versions
+ * - Includes live preview, validation, and cleaner UI
+ */
+
+export default function AdminPrintTemplate({ permissions = [] }) {
+  const canManage =
+    permissions.includes("*") || permissions.includes("canManageSettings");
+
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [active, setActive] = useState("checkIn");
+  const [templates, setTemplates] = useState({
+    checkInTemplate: {
+      header: "MILLENNIUM INN",
+      body: `<p>Welcome {{guestName}} to {{companyName}}.<br/>Room: {{roomNumber}}</p>`,
+      footer: `<p>{{companyAddress}} • VAT: {{companyVatNumber}}</p>`,
+    },
+    checkOutTemplate: {
+      header: "MILLENNIUM INN - Bill",
+      body: `<p>Bill for {{guestName}} <br/> Total: {{balance}}</p>`,
+      footer: `<div>{{signatureLine}}</div>`,
+    },
+  });
+  const [showTokens, setShowTokens] = useState(false);
+  const [lastSaved, setLastSaved] = useState(null);
 
-  const canManage =
-    permissions?.includes("*") || permissions?.includes("canManageSettings");
-
-  // 🔹 Load templates
+  // ------------------------------------
+  // Load templates
+  // ------------------------------------
   useEffect(() => {
-    async function loadTemplates() {
+    if (!canManage) return;
+    (async () => {
+      setLoading(true);
       try {
         const snap = await getDoc(doc(db, "settings", "printTemplates"));
         if (snap.exists()) {
-          setTemplateData((prev) => ({ ...prev, ...snap.data() }));
+          const data = snap.data();
+          setTemplates((t) => ({
+            ...t,
+            ...data,
+          }));
         }
       } catch (err) {
         console.error("Error loading templates:", err);
       } finally {
         setLoading(false);
       }
-    }
-    if (canManage) loadTemplates();
+    })();
   }, [canManage]);
 
-  // 🔹 Save templates
-  const saveTemplates = async () => {
-    if (!canManage) return;
+  if (!canManage)
+    return <div className="muted p-4">Access denied. No edit rights.</div>;
+  if (loading) return <div className="muted p-4">Loading templates…</div>;
+
+  const currentKey =
+    active === "checkIn" ? "checkInTemplate" : "checkOutTemplate";
+  const current = templates[currentKey];
+
+  // ------------------------------------
+  // Save handler with versioning
+  // ------------------------------------
+  const handleSave = async () => {
+    if (!current.header.trim() || !current.body.trim()) {
+      alert("Header and body cannot be empty.");
+      return;
+    }
+
     setSaving(true);
     try {
-      await setDoc(doc(db, "settings", "printTemplates"), templateData, {
+      const user = auth?.currentUser;
+      const savedBy =
+        user?.displayName || user?.email || "system-admin";
+
+      // Save main template
+      await setDoc(doc(db, "settings", "printTemplates"), templates, {
         merge: true,
       });
-      alert("✅ Print templates saved successfully!");
+
+      // Save version copy
+      await addDoc(
+        collection(db, "settings", "printTemplates", "versions"),
+        {
+          templates,
+          savedAt: serverTimestamp(),
+          savedBy,
+        }
+      );
+
+      setLastSaved(new Date().toLocaleString());
+      alert("Templates saved successfully.");
     } catch (err) {
-      console.error("Failed to save templates:", err);
-      alert("❌ Failed to save templates.");
+      console.error("Save failed", err);
+      alert("Failed to save templates. Check console for details.");
     } finally {
       setSaving(false);
     }
   };
 
-  if (!canManage) return <div>Access denied</div>;
-  if (loading) return <div>Loading templates…</div>;
-
-  const current =
-    activeTab === "checkIn"
-      ? templateData.checkInTemplate
-      : templateData.checkOutTemplate;
-
-  const handleChange = (field, value) => {
-    const key =
-      activeTab === "checkIn" ? "checkInTemplate" : "checkOutTemplate";
-    setTemplateData({
-      ...templateData,
-      [key]: { ...templateData[key], [field]: value },
-    });
+  // ------------------------------------
+  // Reset handler
+  // ------------------------------------
+  const defaultTemplates = {
+    checkInTemplate: {
+      header: "MILLENNIUM INN",
+      body: `<p>Welcome {{guestName}} to {{companyName}}.<br/>Room: {{roomNumber}}</p>`,
+      footer: `<p>{{companyAddress}} • VAT: {{companyVatNumber}}</p>`,
+    },
+    checkOutTemplate: {
+      header: "MILLENNIUM INN - Bill",
+      body: `<p>Bill for {{guestName}} <br/> Total: {{balance}}</p>`,
+      footer: `<div>{{signatureLine}}</div>`,
+    },
   };
 
+  const resetTemplate = (key) =>
+    setTemplates((t) => ({
+      ...t,
+      [key]: defaultTemplates[key],
+    }));
+
+  // ------------------------------------
+  // Sanitized preview content
+  // ------------------------------------
+  const previewHtml = DOMPurify.sanitize(
+    `<div style="text-align:center; font-weight:700">${current.header}</div>
+     <hr/>
+     ${current.body}
+     <hr/>
+     ${current.footer}`
+  );
+
   return (
-    <div className="print-template-container">
-      <h2>🧾 Print Template Settings</h2>
+    <div className="card panel" style={{ maxWidth: 960, margin: "0 auto" }}>
+      <div className="panel-header flex-between">
+        <h3>Print Templates</h3>
+        <div className="btn-group">
+          <button
+            className={`btn ${
+              active === "checkIn" ? "btn-primary" : "btn-outline"
+            }`}
+            onClick={() => setActive("checkIn")}
+          >
+            Check-In
+          </button>
+          <button
+            className={`btn ${
+              active === "checkOut" ? "btn-primary" : "btn-outline"
+            }`}
+            onClick={() => setActive("checkOut")}
+          >
+            Check-Out
+          </button>
+        </div>
+      </div>
 
-      {/* Tabs */}
-      <div className="template-tabs">
+      <div className="panel-body grid-2col gap-16">
+        {/* Edit form */}
+        <div>
+          <label>Header</label>
+          <input
+            className="input"
+            value={current.header}
+            onChange={(e) =>
+              setTemplates({
+                ...templates,
+                [currentKey]: { ...current, header: e.target.value },
+              })
+            }
+          />
+
+          <label style={{ marginTop: 8 }}>Body (HTML allowed)</label>
+          <textarea
+            rows={10}
+            className="textarea"
+            value={current.body}
+            onChange={(e) =>
+              setTemplates({
+                ...templates,
+                [currentKey]: { ...current, body: e.target.value },
+              })
+            }
+          />
+
+          <label style={{ marginTop: 8 }}>Footer</label>
+          <input
+            className="input"
+            value={current.footer}
+            onChange={(e) =>
+              setTemplates({
+                ...templates,
+                [currentKey]: { ...current, footer: e.target.value },
+              })
+            }
+          />
+
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "flex-end",
+              gap: 8,
+              marginTop: 12,
+            }}
+          >
+            <button
+              className="btn btn-secondary"
+              onClick={() => resetTemplate(currentKey)}
+            >
+              Reset
+            </button>
+            <button
+              className="btn btn-primary"
+              onClick={handleSave}
+              disabled={saving}
+            >
+              {saving ? "Saving…" : "Save"}
+            </button>
+          </div>
+
+          {lastSaved && (
+            <div className="muted mt-2 text-right">
+              ✓ Last saved: {lastSaved}
+            </div>
+          )}
+        </div>
+
+        {/* Live preview */}
+        <div className="card soft p-3" style={{ background: "#fafafa" }}>
+          <h4 className="mb-2">Live Preview</h4>
+          <div
+            className="preview-body"
+            dangerouslySetInnerHTML={{ __html: previewHtml }}
+          />
+        </div>
+      </div>
+
+      <div style={{ marginTop: 16 }}>
         <button
-          className={activeTab === "checkIn" ? "active" : ""}
-          onClick={() => setActiveTab("checkIn")}
+          className="btn btn-link"
+          onClick={() => setShowTokens((v) => !v)}
         >
-          Check-In Form
+          {showTokens ? "Hide available tokens" : "Show available tokens"}
         </button>
-        <button
-          className={activeTab === "checkOut" ? "active" : ""}
-          onClick={() => setActiveTab("checkOut")}
-        >
-          Check-Out Form
-        </button>
-      </div>
 
-      {/* Editor Section */}
-      <div className="template-editor">
-        <label>Header</label>
-        <input
-          type="text"
-          value={current.header}
-          onChange={(e) => handleChange("header", e.target.value)}
-          placeholder="Enter header text..."
-        />
-
-        <label>Body (HTML supported)</label>
-        <textarea
-          rows={10}
-          value={current.body}
-          onChange={(e) => handleChange("body", e.target.value)}
-          placeholder="Enter HTML body..."
-        />
-
-        <label>Footer</label>
-        <input
-          type="text"
-          value={current.footer}
-          onChange={(e) => handleChange("footer", e.target.value)}
-          placeholder="Enter footer text..."
-        />
-      </div>
-
-      {/* Live Preview */}
-      <div className="template-preview">
-        <h3>Live Preview</h3>
-        <div
-          className="preview-box"
-          dangerouslySetInnerHTML={{
-            __html: `
-              <div style='text-align:center; font-weight:bold; font-size:18px;'>${current.header}</div>
-              <hr/>
-              <div style='margin: 12px 0; font-size:14px;'>${current.body}</div>
-              <hr/>
-              <div style='text-align:center; font-size:12px;'>${current.footer}</div>
-            `,
-          }}
-        />
-      </div>
-
-      {/* Save */}
-      <button
-        className="btn-primary"
-        style={{ marginTop: "16px" }}
-        onClick={saveTemplates}
-        disabled={saving}
-      >
-        {saving ? "Saving…" : "💾 Save Templates"}
-      </button>
-
-      {/* Placeholder Info */}
-      <div className="placeholder-help">
-        <h4>Available Placeholders:</h4>
-        <ul>
-          <li>
-            <code>{"{{guestName}}"}</code> → Guest’s name
-          </li>
-          <li>
-            <code>{"{{roomNumber}}"}</code> → Room number(s)
-          </li>
-          <li>
-            <code>{"{{checkInDate}}"}</code> / <code>{"{{checkOutDate}}"}</code>
-          </li>
-          <li>
-            <code>{"{{balance}}"}</code> → Total balance (check-out form)
-          </li>
-          <li>
-            <code>{"{{staffName}}"}</code> → Printed by staff name
-          </li>
-        </ul>
+        {showTokens && (
+          <div className="card soft p-3">
+            <strong>Available tokens:</strong>
+            <div className="muted">
+              Use placeholders like{" "}
+              <code>{"{{guestName}}"}</code>,{" "}
+              <code>{"{{roomNumber}}"}</code>,{" "}
+              <code>{"{{balance}}"}</code>,{" "}
+              <code>{"{{guestAddress}}"}</code>,{" "}
+              <code>{"{{guestPhone}}"}</code>,{" "}
+              <code>{"{{companyName}}"}</code>,{" "}
+              <code>{"{{companyAddress}}"}</code>,{" "}
+              <code>{"{{companyVatNumber}}"}</code>,{" "}
+              <code>{"{{signatureLine}}"}</code>.
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
