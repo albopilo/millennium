@@ -1,224 +1,192 @@
 // src/pages/ReservationDetailB.jsx
-import React, { useState, useEffect } from "react";
-import { doc, updateDoc } from "firebase/firestore";
-import { db } from "../firebase";
+import React from "react";
+import "../styles/ReservationDetail.css"; // optional shared style
 
-export default function ReservationDetailB(props) {
-  const {
-    reservation,
-    guest,
-    settings,
-    rooms,
-    assignRooms,
-    renderAssignmentRow,
-    setAssignRooms,
-    canOperate,
-    canUpgrade,
-    doCheckIn,
-    printCheckInForm,
-    upgradeIndex,
-    setUpgradeIndex,
-    preUpgradeOptions,
-    upgradePreRoom,
-    setUpgradePreRoom,
-    doUpgradePreCheckIn,
-    stays,
-    setMoveRoomStay,
-    setUpgradeStay,
-    canOverrideBilling,
-    doCheckOut,
-    printCheckOutBill,
-    moveRoomStay,
-    newRoom,
-    setNewRoom,
-    sameTypeOptions,
-    doChangeRoom,
-    upgradeStay,
-    upgradeRoom,
-    setUpgradeRoom,
-    upgradeOptions,
-    doUpgradeRoom,
-    handleDeleteReservation,
-    isAdmin,
-    navigate,
-    fmt,
-    currentUser,
-    children,
-    logReservationChange, // injected from parent A
-   } = props;
+export default function ReservationDetailB({
+  reservation,
+  guest,
+  settings,
+  rooms = [],
+  assignRooms = [],
+  renderAssignmentRow,
+  setAssignRooms,
+  canOperate,
+  canUpgrade,
+  doCheckIn,
+  doCheckOut,
+  printCheckInForm,
+  printCheckOutBill,
+  preUpgradeOptions = [],
+  sameTypeOptions = [],
+  upgradeOptions = [],
+  moveRoomStay,
+  setMoveRoomStay,
+  newRoom,
+  setNewRoom,
+  upgradeStay,
+  setUpgradeStay,
+  upgradeRoom,
+  setUpgradeRoom,
+  upgradeIndex,
+  setUpgradeIndex,
+  upgradePreRoom,
+  setUpgradePreRoom,
+  doUpgradePreCheckIn,
+  doUpgradeRoom,
+  stays = [],
+  handleDeleteReservation,
+  navigate,
+  isAdmin,
+  fmt,
+  logReservationChange,
+  currentUser,
+  children,
+}) {
+  // Safe handler helper
+  const safeCall = async (fn, ...args) => {
+    if (typeof fn === "function") return await fn(...args);
+  };
 
+  // --- Wrapped Actions (with logging) ---
+  const handleDoCheckIn = async () => {
+    await safeCall(doCheckIn);
+    await safeCall(logReservationChange, "check_in", { data: null });
+  };
 
-  // --- Action wrappers that ensure logging for "global" actions done in this component ---
-  async function handleDoCheckIn() {
-    try {
-      if (typeof doCheckIn === "function") await doCheckIn();
-      await logReservationChange("check_in", { data: null });
-    } catch (err) {
-      console.error("handleDoCheckIn failed:", err);
-    }
-  }
+  const handleDoCheckOut = async () => {
+    await safeCall(doCheckOut);
+    await safeCall(logReservationChange, "checkout", {
+      data: {
+        penalty: settings?.earlyDeparturePenalty || 0,
+        refund: settings?.earlyDepartureRefund || 0,
+      },
+    });
+  };
 
-  async function handleDoCheckOut() {
-    try {
-      // ✅ Trigger checkout (existing parent handler if any)
-      if (typeof doCheckOut === "function") await doCheckOut();
-      if (typeof logReservationChange === "function") {
-        await logReservationChange("checkout", { data: {
-            penalty: settings?.earlyDeparturePenalty || 0,
-            refund: settings?.earlyDepartureRefund || 0,
-          },
-        });
-      }
-    } catch (err) {
-      console.error("handleDoCheckOut failed:", err);
-    }
-  }
+  const handleConfirmChangeRoom = async () => {
+    await safeCall(doChangeRoom);
+    await safeCall(logReservationChange, "change_room", {
+      data: {
+        from: moveRoomStay?.roomNumber || null,
+        to: newRoom || null,
+      },
+    });
+  };
 
-  async function handleConfirmChangeRoom() {
-    try {
-      if (typeof doChangeRoom === "function") await doChangeRoom();
-      await logReservationChange("change_room", { data: { from: moveRoomStay?.roomNumber || null, to: newRoom || null },
-      });
-    } catch (err) {
-      console.error("handleConfirmChangeRoom failed:", err);
-    }
-  }
+  const handleConfirmUpgradePreCheckIn = async () => {
+    await safeCall(doUpgradePreCheckIn);
+    await safeCall(logReservationChange, "upgrade_pre_checkin", {
+      data: { index: upgradeIndex, to: upgradePreRoom },
+    });
+  };
 
-  async function handleConfirmUpgradePreCheckIn() {
-    try {
-      if (typeof doUpgradePreCheckIn === "function") await doUpgradePreCheckIn();
-      await logReservationChange("upgrade_pre_checkin", { data: { index: upgradeIndex, to: upgradePreRoom } });
-    } catch (err) {
-      console.error("handleConfirmUpgradePreCheckIn failed:", err);
-    }
-  }
+  const handleConfirmUpgradeRoom = async () => {
+    await safeCall(doUpgradeRoom);
+    await safeCall(logReservationChange, "upgrade_room", {
+      data: { from: upgradeStay?.roomNumber, to: upgradeRoom },
+    });
+  };
 
-  async function handleConfirmUpgradeRoom() {
-    try {
-      if (typeof doUpgradeRoom === "function") await doUpgradeRoom();
-      await logReservationChange("upgrade_room", { data: { from: upgradeStay?.roomNumber, to: upgradeRoom } });
-    } catch (err) {
-      console.error("handleConfirmUpgradeRoom failed:", err);
-    }
-  }
+  if (!reservation) return <div className="p-4 text-gray-500">Loading reservation...</div>;
 
+  // --- Helper renderers ---
+  const Section = ({ title, children }) => (
+    <section className="reservation-section">
+      <h3 className="section-title">{title}</h3>
+      {children}
+    </section>
+  );
 
-  // Defensive: don't attempt to render if reservation isn't available yet
-  if (!reservation) {
-    return null;
-  }
-
+  // ============================
+  // Main Render
+  // ============================
   return (
-    <div className="reservations-container">
-      <h2 style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <span>Reservation Detail</span>
-
-        {isAdmin && (
-          <button
-            onClick={() => navigate(`/reservations/${reservation.id}/edit`)}
-            style={{ backgroundColor: "#2563eb", color: "#fff", marginRight: "8px" }}
-          >
-            Edit Reservation
-          </button>
-        )}
-
-        {isAdmin && (
-          <button className="btn btn-danger" onClick={handleDeleteReservation}>
-            Delete Reservation
-          </button>
-        )}
-      </h2>
-
-      {/* Summary */}
-      <div className="reservation-form" style={{ marginBottom: 12 }}>
-        <label>Guest</label>
-        <div>
-          {reservation?.guestName || "-"} {guest?.tier ? `(${guest.tier})` : ""}
-        </div>
-        <label>Stay</label>
-        <div>
-          {fmt(reservation?.checkInDate)} → {fmt(reservation?.checkOutDate)}
-        </div>
-        <label>Status</label>
-        <div>{reservation?.status || "-"}</div>
-        <label>Channel</label>
-        <div>{reservation?.channel || "-"}</div>
-        <label>Assigned rooms</label>
-        <div>
-          {Array.isArray(reservation?.roomNumbers)
-            ? reservation.roomNumbers.join(", ")
-            : reservation?.roomNumber || "-"}
+    <div className="reservation-detail-container">
+      {/* Header */}
+      <div className="header-row">
+        <h2 className="title">Reservation Detail</h2>
+        <div className="header-actions">
+          {isAdmin && (
+            <>
+              <button
+                className="btn btn-primary"
+                onClick={() => navigate(`/reservations/${reservation.id}/edit`)}
+              >
+                Edit
+              </button>
+              <button className="btn btn-danger" onClick={handleDeleteReservation}>
+                Delete
+              </button>
+            </>
+          )}
         </div>
       </div>
 
-      {/* Check-in / Pre-check-in upgrades */}
-      {((reservation.status || "").toLowerCase() === "booked") && (
-        <div className="reservation-form" style={{ marginBottom: 12 }}>
-          <h4>Check-In</h4>
+      {/* Summary */}
+      <Section title="Summary">
+        <div className="summary-grid">
+          <div><strong>Guest:</strong> {reservation.guestName || "-"} {guest?.tier ? `(${guest.tier})` : ""}</div>
+          <div><strong>Stay:</strong> {fmt(reservation.checkInDate)} → {fmt(reservation.checkOutDate)}</div>
+          <div><strong>Status:</strong> {reservation.status || "-"}</div>
+          <div><strong>Channel:</strong> {reservation.channel || "-"}</div>
+          <div><strong>Assigned Rooms:</strong> {Array.isArray(reservation.roomNumbers)
+            ? reservation.roomNumbers.join(", ")
+            : reservation.roomNumber || "-"}</div>
+        </div>
+      </Section>
 
-          <label>Assign rooms (locked by type per index)</label>
-          <div>
-            {(assignRooms.length ? assignRooms : [""]).map((_, idx) =>
-              renderAssignmentRow(idx)
-            )}
+      {/* BOOKED STATE */}
+      {reservation.status?.toLowerCase() === "booked" && (
+        <Section title="Pre Check-In">
+          <label>Assign Rooms</label>
+          <div className="assign-list">
+            {(assignRooms.length ? assignRooms : [""]).map((_, i) => renderAssignmentRow?.(i))}
           </div>
 
-          <div className="form-actions" style={{ marginTop: 8 }}>
-            {canOperate && (
-              <>
-                <button className="btn-primary" onClick={handleDoCheckIn}>
-                  Check In
-                </button>
-                <button onClick={printCheckInForm} style={{ marginLeft: 8 }}>
-                  Print Check-In Form
-                </button>
-              </>
-            )}
-          </div>
+          {canOperate && (
+            <div className="btn-group">
+              <button className="btn btn-primary" onClick={handleDoCheckIn}>Check In</button>
+              <button className="btn btn-secondary" onClick={printCheckInForm}>Print Form</button>
+            </div>
+          )}
 
-          {canUpgrade && assignRooms.length > 0 && (
-            <>
-              <h5 style={{ marginTop: 16 }}>Upgrade (different type, before check-in)</h5>
-              <label>Select room index to upgrade</label>
+          {canUpgrade && (
+            <div className="upgrade-section">
+              <h4>Upgrade Before Check-In</h4>
+              <label>Room Index</label>
               <select
                 value={upgradeIndex ?? ""}
-                onChange={(e) =>
-                  setUpgradeIndex(e.target.value === "" ? null : Number(e.target.value))
-                }
+                onChange={(e) => setUpgradeIndex(e.target.value === "" ? null : Number(e.target.value))}
               >
-                <option value="">Choose index</option>
+                <option value="">Select</option>
                 {assignRooms.map((rm, i) => (
-                  <option key={i} value={i}>
-                    #{i + 1}: {rm || "(unassigned)"}
-                  </option>
+                  <option key={i} value={i}>{`#${i + 1}: ${rm || "(unassigned)"}`}</option>
                 ))}
               </select>
 
               {upgradeIndex != null && (
                 <>
-                  <label>New room (different type allowed)</label>
+                  <label>New Room</label>
                   <select
                     value={upgradePreRoom}
                     onChange={(e) => setUpgradePreRoom(e.target.value)}
                   >
-                    <option value="">Select room</option>
+                    <option value="">Select</option>
                     {preUpgradeOptions.map((opt) => (
-                      <option key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </option>
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
                     ))}
                   </select>
 
-                  <div className="form-actions" style={{ marginTop: 8 }}>
+                  <div className="btn-group">
                     <button
-                      className="btn-primary"
+                      className="btn btn-primary"
                       onClick={handleConfirmUpgradePreCheckIn}
                       disabled={!upgradePreRoom}
                     >
                       Confirm Upgrade
                     </button>
                     <button
-                      style={{ marginLeft: 8 }}
+                      className="btn btn-secondary"
                       onClick={() => {
                         setUpgradeIndex(null);
                         setUpgradePreRoom("");
@@ -229,147 +197,97 @@ export default function ReservationDetailB(props) {
                   </div>
                 </>
               )}
-            </>
+            </div>
           )}
-        </div>
+        </Section>
       )}
 
-      {/* In-House controls (checked-in) */}
-      {stays.length > 0 && (
-        <>
-          <div className="reservation-form" style={{ marginBottom: 12 }}>
-            <h4>In-House</h4>
+      {/* CHECKED-IN / IN-HOUSE */}
+      {stays?.length > 0 && (
+        <Section title="In-House Guests">
+          <p>
+            <strong>Active rooms:</strong>{" "}
+            {stays.filter((s) => s.status === "open").map((s) => s.roomNumber).join(", ") || "—"}
+          </p>
 
-            <label>Open stays</label>
-            <div>
-              {stays.filter((s) => s.status === "open").length
-                ? stays
-                    .filter((s) => s.status === "open")
-                    .map((s) => s.roomNumber)
-                    .join(", ")
-                : "-"}
-            </div>
-
-            <div className="form-actions" style={{ marginTop: 8 }}>
-              {canOperate && (reservation.status === "checked-in") && (
-                <>
-                  <button
-                    className="btn-primary"
-                    onClick={() =>
-                      setMoveRoomStay(stays.find((s) => s.status === "open") || null)
-                    }
-                    disabled={!stays.some((s) => s.status === "open")}
-                  >
-                    Change Room (same type)
-                  </button>
-
-                  {canUpgrade && (
-                    <button
-                      className="btn-primary"
-                      style={{ marginLeft: 8 }}
-                      onClick={() =>
-                        setUpgradeStay(stays.find((s) => s.status === "open") || null)
-                      }
-                      disabled={!stays.some((s) => s.status === "open")}
-                    >
-                      Upgrade Room (different type)
-                    </button>
-                  )}
-
-                  <button
-                    className="btn-primary"
-                    style={{ marginLeft: 8 }}
-                    onClick={doCheckOut}
-                    disabled={stays.every((s) => s.status !== "open")}
-                  >
-                    Check Out
-                  </button>
-
-                  {/* ✅ Added so check-in form can be printed even after checked in */}
-                  <button style={{ marginLeft: 8 }} onClick={printCheckInForm}>
-                    Print Check-In Form
-                  </button>
-
-                  <button style={{ marginLeft: 8 }} onClick={printCheckOutBill}>
-                    Print Check-Out Bill
-                  </button>
-                </>
-              )}
-            </div>
-          </div>
-
-          {/* Change room panel */}
-          {moveRoomStay && (
-            <div className="reservation-form" style={{ marginBottom: 12 }}>
-              <label>Current room</label>
-              <div>{moveRoomStay.roomNumber}</div>
-
-              <label>New room (same type)</label>
-              <select value={newRoom} onChange={(e) => setNewRoom(e.target.value)}>
-                <option value="">Select room</option>
-                {sameTypeOptions.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-
-              <div className="form-actions">
-                 <button className="btn-primary" onClick={handleConfirmChangeRoom} disabled={!newRoom}>
-                  Confirm Change
-                </button>
-                <button
-                  style={{ marginLeft: 8 }}
-                  onClick={() => {
-                    setMoveRoomStay(null);
-                    setNewRoom("");
-                  }}
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Upgrade room panel */}
-          {canUpgrade && upgradeStay && (
-            <div className="reservation-form" style={{ marginBottom: 12 }}>
-              <label>Current room</label>
-              <div>{upgradeStay.roomNumber}</div>
-
-              <label>New room (different type allowed)</label>
-              <select value={upgradeRoom} onChange={(e) => setUpgradeRoom(e.target.value)}>
-                <option value="">Select room</option>
-                {upgradeOptions.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-
-              <div className="form-actions">
-                <button
-               className="btn-primary"
-                onClick={handleConfirmUpgradeRoom}
-                disabled={!upgradeRoom}
+          {canOperate && reservation.status === "checked-in" && (
+            <div className="btn-group">
+              <button
+                className="btn btn-primary"
+                disabled={!stays.some((s) => s.status === "open")}
+                onClick={() => setMoveRoomStay(stays.find((s) => s.status === "open"))}
               >
-                Confirm Upgrade
+                Change Room
               </button>
+              {canUpgrade && (
                 <button
-                  style={{ marginLeft: 8 }}
-                  onClick={() => {
-                    setUpgradeStay(null);
-                    setUpgradeRoom("");
-                  }}
+                  className="btn btn-primary"
+                  onClick={() => setUpgradeStay(stays.find((s) => s.status === "open"))}
                 >
-                  Cancel
+                  Upgrade Room
                 </button>
-              </div>
+              )}
+              <button className="btn btn-danger" onClick={handleDoCheckOut}>
+                Check Out
+              </button>
+              <button className="btn btn-secondary" onClick={printCheckInForm}>
+                Print Check-In Form
+              </button>
+              <button className="btn btn-secondary" onClick={printCheckOutBill}>
+                Print Bill
+              </button>
             </div>
           )}
-        </>
+        </Section>
       )}
-      {/* ✅ Inject children such as ReservationDetailC with logging support */}
+
+      {/* ROOM CHANGE */}
+      {moveRoomStay && (
+        <Section title="Change Room">
+          <p><strong>Current Room:</strong> {moveRoomStay.roomNumber}</p>
+          <label>New Room (Same Type)</label>
+          <select value={newRoom} onChange={(e) => setNewRoom(e.target.value)}>
+            <option value="">Select Room</option>
+            {sameTypeOptions.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+
+          <div className="btn-group">
+            <button className="btn btn-primary" onClick={handleConfirmChangeRoom} disabled={!newRoom}>
+              Confirm
+            </button>
+            <button className="btn btn-secondary" onClick={() => { setMoveRoomStay(null); setNewRoom(""); }}>
+              Cancel
+            </button>
+          </div>
+        </Section>
+      )}
+
+      {/* ROOM UPGRADE */}
+      {canUpgrade && upgradeStay && (
+        <Section title="Upgrade Room">
+          <p><strong>Current Room:</strong> {upgradeStay.roomNumber}</p>
+          <label>New Room</label>
+          <select value={upgradeRoom} onChange={(e) => setUpgradeRoom(e.target.value)}>
+            <option value="">Select Room</option>
+            {upgradeOptions.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+
+          <div className="btn-group">
+            <button className="btn btn-primary" onClick={handleConfirmUpgradeRoom} disabled={!upgradeRoom}>
+              Confirm
+            </button>
+            <button className="btn btn-secondary" onClick={() => { setUpgradeStay(null); setUpgradeRoom(""); }}>
+              Cancel
+            </button>
+          </div>
+        </Section>
+      )}
+
+      {/* CHILD COMPONENT (C) INJECTION */}
       {children &&
         React.cloneElement(children, {
           reservation,
@@ -382,8 +300,6 @@ export default function ReservationDetailB(props) {
           printCheckInForm,
           printCheckOutBill,
         })}
-
-    
     </div>
   );
 }
