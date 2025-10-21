@@ -1,4 +1,4 @@
-// src/admin/adminprinttemplate.jsx
+// src/admin/AdminPrintTemplate.jsx
 import React, { useState, useEffect } from "react";
 import { doc, getDoc, setDoc } from "firebase/firestore";
 import { db } from "../firebase";
@@ -49,10 +49,10 @@ export default function AdminPrintTemplate({ permissions }) {
       await setDoc(doc(db, "settings", "printTemplates"), templateData, {
         merge: true,
       });
-      alert("Print templates saved successfully!");
+      alert("✅ Print templates saved successfully!");
     } catch (err) {
       console.error("Failed to save templates:", err);
-      alert("Failed to save templates.");
+      alert("❌ Failed to save templates.");
     } finally {
       setSaving(false);
     }
@@ -61,9 +61,10 @@ export default function AdminPrintTemplate({ permissions }) {
   if (!canManage) return <div>Access denied</div>;
   if (loading) return <div>Loading templates…</div>;
 
-  const current = activeTab === "checkIn"
-    ? templateData.checkInTemplate
-    : templateData.checkOutTemplate;
+  const current =
+    activeTab === "checkIn"
+      ? templateData.checkInTemplate
+      : templateData.checkOutTemplate;
 
   const handleChange = (field, value) => {
     const key =
@@ -76,8 +77,9 @@ export default function AdminPrintTemplate({ permissions }) {
 
   return (
     <div className="print-template-container">
-      <h2>Print Template Settings</h2>
+      <h2>🧾 Print Template Settings</h2>
 
+      {/* Tabs */}
       <div className="template-tabs">
         <button
           className={activeTab === "checkIn" ? "active" : ""}
@@ -93,12 +95,14 @@ export default function AdminPrintTemplate({ permissions }) {
         </button>
       </div>
 
+      {/* Editor Section */}
       <div className="template-editor">
         <label>Header</label>
         <input
           type="text"
           value={current.header}
           onChange={(e) => handleChange("header", e.target.value)}
+          placeholder="Enter header text..."
         />
 
         <label>Body (HTML supported)</label>
@@ -106,6 +110,7 @@ export default function AdminPrintTemplate({ permissions }) {
           rows={10}
           value={current.body}
           onChange={(e) => handleChange("body", e.target.value)}
+          placeholder="Enter HTML body..."
         />
 
         <label>Footer</label>
@@ -113,9 +118,11 @@ export default function AdminPrintTemplate({ permissions }) {
           type="text"
           value={current.footer}
           onChange={(e) => handleChange("footer", e.target.value)}
+          placeholder="Enter footer text..."
         />
       </div>
 
+      {/* Live Preview */}
       <div className="template-preview">
         <h3>Live Preview</h3>
         <div
@@ -129,26 +136,38 @@ export default function AdminPrintTemplate({ permissions }) {
               <div style='text-align:center; font-size:12px;'>${current.footer}</div>
             `,
           }}
-        ></div>
+        />
       </div>
 
+      {/* Save */}
       <button
         className="btn-primary"
         style={{ marginTop: "16px" }}
         onClick={saveTemplates}
         disabled={saving}
       >
-        {saving ? "Saving…" : "Save Templates"}
+        {saving ? "Saving…" : "💾 Save Templates"}
       </button>
 
+      {/* Placeholder Info */}
       <div className="placeholder-help">
         <h4>Available Placeholders:</h4>
         <ul>
-          <li><code>{{guestName}}</code> → Guest’s name</li>
-          <li><code>{{roomNumber}}</code> → Room number</li>
-          <li><code>{{checkInDate}}</code> / <code>{{checkOutDate}}</code></li>
-          <li><code>{{balance}}</code> → Total balance</li>
-          <li><code>{{staffName}}</code> → Printed by staff</li>
+          <li>
+            <code>{"{{guestName}}"}</code> → Guest’s name
+          </li>
+          <li>
+            <code>{"{{roomNumber}}"}</code> → Room number(s)
+          </li>
+          <li>
+            <code>{"{{checkInDate}}"}</code> / <code>{"{{checkOutDate}}"}</code>
+          </li>
+          <li>
+            <code>{"{{balance}}"}</code> → Total balance (check-out form)
+          </li>
+          <li>
+            <code>{"{{staffName}}"}</code> → Printed by staff name
+          </li>
         </ul>
       </div>
     </div>
