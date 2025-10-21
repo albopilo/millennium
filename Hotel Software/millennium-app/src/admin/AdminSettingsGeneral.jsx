@@ -7,622 +7,359 @@ import {
   deleteDoc,
   doc,
   getDoc,
-  setDoc
+  setDoc,
 } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 import { db } from "../firebase";
 
-export default function AdminSettingsGeneral({ permissions = [], permLoading }) {
-  const can = (perm) =>
-    Array.isArray(permissions) &&
-    (permissions.includes(perm) || permissions.includes("*"));
+// ===== Helper UI Components =====
+const Card = ({ title, children }) => (
+  <section className="bg-white rounded-2xl shadow-md mb-6 border border-gray-200">
+    <header className="border-b px-4 py-2 flex justify-between items-center bg-gray-50 rounded-t-2xl">
+      <h3 className="text-lg font-semibold text-gray-700">{title}</h3>
+    </header>
+    <div className="p-4">{children}</div>
+  </section>
+);
 
-  // State
+const Input = ({ label, value, onChange, type = "text", placeholder, className = "" }) => (
+  <div className={`flex flex-col mb-2 ${className}`}>
+    {label && <label className="text-sm text-gray-600 mb-1">{label}</label>}
+    <input
+      type={type}
+      placeholder={placeholder}
+      value={value}
+      onChange={onChange}
+      className="border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+    />
+  </div>
+);
+
+const Button = ({ children, onClick, color = "blue", variant = "solid", className = "" }) => {
+  const base =
+    "px-3 py-2 text-sm rounded-md font-medium transition-all duration-150 " +
+    (variant === "solid"
+      ? `bg-${color}-600 text-white hover:bg-${color}-700`
+      : `border border-${color}-600 text-${color}-700 hover:bg-${color}-50`);
+  return (
+    <button onClick={onClick} className={`${base} ${className}`}>
+      {children}
+    </button>
+  );
+};
+
+// ===== Main Component =====
+export default function AdminSettingsGeneral({ permissions = [], permLoading }) {
+  const can = (perm) => Array.isArray(permissions) && (permissions.includes(perm) || permissions.includes("*"));
+
+  // States
   const [depositPerRoom, setDepositPerRoom] = useState("");
   const [rooms, setRooms] = useState([]);
   const [channels, setChannels] = useState([]);
   const [events, setEvents] = useState([]);
   const [rateTypes, setRateTypes] = useState([]);
-  const [rates, setRates] = useState([]); // [{ id?, roomType, channelId, weekdayRate?, weekendRate?, price?, rateType? }]
+  const [rates, setRates] = useState([]);
+  const [loading, setLoading] = useState(true);
 
   const [newRoom, setNewRoom] = useState({ roomNumber: "", roomType: "" });
   const [newChannel, setNewChannel] = useState({ name: "", rateType: "" });
-  const [newEvent, setNewEvent] = useState({
-    name: "",
-    startDate: "",
-    endDate: "",
-    rateType: ""
-  });
+  const [newEvent, setNewEvent] = useState({ name: "", startDate: "", endDate: "", rateType: "" });
 
-  // Load data
-  const fetchData = useCallback(async () => {
-    console.log("🔍 UID:", getAuth().currentUser?.uid);
-    console.log("🔍 can('*'):", can("*"));
-    console.log("🔍 permissions array:", permissions);
-
-    try {
-      const settingsSnap = await getDoc(doc(db, "settings", "general"));
-      setDepositPerRoom(
-        settingsSnap.exists() && typeof settingsSnap.data().depositPerRoom === "number"
-          ? String(settingsSnap.data().depositPerRoom)
-          : ""
-      );
-    } catch (e) {
-      console.error("Failed to read settings/general:", e);
-    }
-
-    try {
-      const roomSnap = await getDocs(collection(db, "rooms"));
-      setRooms(roomSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
-    } catch (e) {
-      console.error("Failed to read rooms:", e);
-    }
-
-    try {
-      const chanSnap = await getDocs(collection(db, "channels"));
-      setChannels(chanSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
-    } catch (e) {
-      console.error("Failed to read channels:", e);
-    }
-
-    try {
-      const eventSnap = await getDocs(collection(db, "events"));
-      setEvents(eventSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
-    } catch (e) {
-      console.error("Failed to read events:", e);
-    }
-
-    try {
-      const rateTypeSnap = await getDocs(collection(db, "rateTypes"));
-      setRateTypes(
-        rateTypeSnap.docs.map((d) => ({
-          id: d.id,
-          label: d.data().label
-        }))
-      );
-    } catch (e) {
-      console.error("Failed to read rateTypes:", e);
-    }
-
-    try {
-      const ratesSnap = await getDocs(collection(db, "rates"));
-      setRates(ratesSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
-    } catch (e) {
-      console.error("Failed to read rates:", e);
-    }
-  }, [permissions]);
-
-  useEffect(() => {
-    if (!permLoading && can("*")) {
-      fetchData();
-    }
-  }, [permLoading, permissions, fetchData]);
-
-  if (permLoading) return <p>Loading permissions…</p>;
-  if (!can("*")) return <p>Access denied</p>;
-
-  // Permissions mapping
   const PERM = {
     settings: "canManageSettings",
     rooms: "canManageRooms",
     channels: "canManageChannels",
     events: "canManageEvents",
-    rates: "canManageRates"
+    rates: "canManageRates",
   };
 
-  const guard = (path, permName) => {
+  const guard = (permName) => {
     if (permLoading || !(can(permName) || can("*"))) {
-      console.warn(`⛔ Blocked write to ${path}: missing permission ${permName} or loading`);
+      alert("You do not have permission for this action.");
       return false;
     }
-    console.log(`✏️ Writing to: ${path} (perm: ${permName})`);
     return true;
   };
 
-  // Settings
+  // Fetch all data concurrently
+  const fetchData = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [settingsSnap, roomsSnap, channelsSnap, eventsSnap, rateTypesSnap, ratesSnap] =
+        await Promise.all([
+          getDoc(doc(db, "settings", "general")),
+          getDocs(collection(db, "rooms")),
+          getDocs(collection(db, "channels")),
+          getDocs(collection(db, "events")),
+          getDocs(collection(db, "rateTypes")),
+          getDocs(collection(db, "rates")),
+        ]);
+
+      if (settingsSnap.exists())
+        setDepositPerRoom(String(settingsSnap.data().depositPerRoom || ""));
+      setRooms(roomsSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      setChannels(channelsSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      setEvents(eventsSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      setRateTypes(rateTypesSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      setRates(ratesSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
+    } catch (e) {
+      console.error("Data load failed:", e);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!permLoading && can("*")) fetchData();
+  }, [permLoading, permissions, fetchData]);
+
+  if (permLoading) return <p>Loading permissions…</p>;
+  if (!can("*")) return <p className="text-center text-gray-500">Access denied</p>;
+
+  // ===== Actions =====
   const saveDeposit = async () => {
-    if (!guard("settings/general", PERM.settings)) return;
-    try {
-      const value = Number(depositPerRoom);
-      if (!Number.isFinite(value) || value < 0) {
-        alert("Enter a valid non-negative number for Deposit per room.");
-        return;
-      }
-      await setDoc(doc(db, "settings", "general"), { depositPerRoom: value }, { merge: true });
-      alert("Deposit per room updated");
-    } catch (e) {
-      console.error("Write failed: settings/general", e);
-      alert("Failed to save settings. Check permissions and try again.");
-    }
+    if (!guard(PERM.settings)) return;
+    const val = Number(depositPerRoom);
+    if (!Number.isFinite(val) || val < 0) return alert("Invalid number.");
+    await setDoc(doc(db, "settings", "general"), { depositPerRoom: val }, { merge: true });
+    alert("Deposit updated.");
   };
 
-  // Rooms
-  const addRoom = async () => {
-    if (!guard("rooms (add)", PERM.rooms)) return;
-    if (!newRoom.roomNumber || !newRoom.roomType) return;
-    try {
-      await addDoc(collection(db, "rooms"), newRoom);
-      setNewRoom({ roomNumber: "", roomType: "" });
-      fetchData();
-    } catch (e) {
-      console.error("Add room failed", e);
-      alert("Failed to add room.");
-    }
+  const addItem = async (collectionName, item, perm) => {
+    if (!guard(perm)) return;
+    await addDoc(collection(db, collectionName), item);
+    await fetchData();
   };
 
-  const updateRoom = async (id, field, value) => {
-    if (!guard(`rooms/${id}`, PERM.rooms)) return;
-    try {
-      await updateDoc(doc(db, "rooms", id), { [field]: value });
-      fetchData();
-    } catch (e) {
-      console.error(`Update room ${id} failed`, e);
-      alert("Failed to update room.");
-    }
+  const updateItem = async (collectionName, id, data, perm) => {
+    if (!guard(perm)) return;
+    await updateDoc(doc(db, collectionName, id), data);
+    await fetchData();
   };
 
-  const deleteRoom = async (id) => {
-    if (!guard(`rooms/${id}`, PERM.rooms)) return;
-    if (!window.confirm("Delete this room?")) return;
-    try {
-      await deleteDoc(doc(db, "rooms", id));
-      fetchData();
-    } catch (e) {
-      console.error(`Delete room ${id} failed`, e);
-      alert("Failed to delete room.");
-    }
+  const deleteItem = async (collectionName, id, perm) => {
+    if (!guard(perm)) return;
+    if (!window.confirm("Are you sure?")) return;
+    await deleteDoc(doc(db, collectionName, id));
+    await fetchData();
   };
 
-  // Channels
-  const addChannel = async () => {
-    if (!guard("channels (add)", PERM.channels)) return;
-    if (!newChannel.name) return;
-    try {
-      await addDoc(collection(db, "channels"), newChannel);
-      setNewChannel({ name: "", rateType: "" });
-      fetchData();
-    } catch (e) {
-      console.error("Add channel failed", e);
-      alert("Failed to add channel.");
-    }
+  const saveRate = async (roomType, channelId, rateObj) => {
+    if (!guard(PERM.rates)) return;
+    const ref = doc(db, "rates", `${roomType}__${channelId}`);
+    await setDoc(ref, rateObj, { merge: true });
+    fetchData();
   };
 
-  const updateChannel = async (id, field, value) => {
-    if (!guard(`channels/${id}`, PERM.channels)) return;
-    try {
-      await updateDoc(doc(db, "channels", id), { [field]: value });
-      fetchData();
-    } catch (e) {
-      console.error(`Update channel ${id} failed`, e);
-      alert("Failed to update channel.");
-    }
-  };
+  if (loading) return <p className="text-gray-500 text-center">Loading data...</p>;
 
-  const deleteChannel = async (id) => {
-    if (!guard(`channels/${id}`, PERM.channels)) return;
-    if (!window.confirm("Delete this channel?")) return;
-    try {
-      await deleteDoc(doc(db, "channels", id));
-      fetchData();
-    } catch (e) {
-      console.error(`Delete channel ${id} failed`, e);
-      alert("Failed to delete channel.");
-    }
-  };
-
-  // Events
-  const addEvent = async () => {
-    if (!guard("events (add)", PERM.events)) return;
-    if (!newEvent.name) return;
-    try {
-      await addDoc(collection(db, "events"), newEvent);
-      setNewEvent({ name: "", startDate: "", endDate: "", rateType: "" });
-      fetchData();
-    } catch (e) {
-      console.error("Add event failed", e);
-      alert("Failed to add event.");
-    }
-  };
-
-  const updateEvent = async (id, field, value) => {
-    if (!guard(`events/${id}`, PERM.events)) return;
-    try {
-      await updateDoc(doc(db, "events", id), { [field]: value });
-      fetchData();
-    } catch (e) {
-      console.error(`Update event ${id} failed`, e);
-      alert("Failed to update event.");
-    }
-  };
-
-  const deleteEvent = async (id) => {
-    if (!guard(`events/${id}`, PERM.events)) return;
-    if (!window.confirm("Delete this event?")) return;
-    try {
-      await deleteDoc(doc(db, "events", id));
-      fetchData();
-    } catch (e) {
-      console.error(`Delete event ${id} failed`, e);
-      alert("Failed to delete event.");
-    }
-  };
-
-  // Rates: update local state (ephemeral if missing)
-  const updateRate = (roomType, channelId, partial) => {
-    setRates((prev) => {
-      const idx = prev.findIndex((r) => r.roomType === roomType && r.channelId === channelId);
-      if (idx >= 0) {
-        const next = [...prev];
-        next[idx] = { ...next[idx], ...partial };
-        return next;
-        }
-      // Create new local row
-      const base =
-        channelId === "direct"
-          ? { roomType, channelId, weekdayRate: 0, weekendRate: 0 }
-          : { roomType, channelId, price: 0, rateType: "custom" };
-      return [...prev, { ...base, ...partial }];
-    });
-  };
-
-  // Rates: persist to Firestore (deterministic ID to avoid duplicates)
-  const saveRate = async (roomType, channelId) => {
-    if (!guard(`rates/${roomType}__${channelId}`, PERM.rates)) return;
-    try {
-      const current = rates.find((r) => r.roomType === roomType && r.channelId === channelId);
-      if (!current) return;
-
-      if (channelId === "direct") {
-        const wr = Number(current.weekdayRate);
-        const er = Number(current.weekendRate);
-        if ((!Number.isFinite(wr) || wr < 0) || (!Number.isFinite(er) || er < 0)) {
-          alert("Enter valid non-negative numbers for Direct rates.");
-          return;
-        }
-        await setDoc(
-          doc(db, "rates", `${roomType}__${channelId}`),
-          { roomType, channelId, weekdayRate: wr, weekendRate: er },
-          { merge: true }
-        );
-      } else {
-        const price = Number(current.price);
-        if (!Number.isFinite(price) || price < 0) {
-          alert("Enter a valid non-negative number for OTA price.");
-          return;
-        }
-        await setDoc(
-          doc(db, "rates", `${roomType}__${channelId}`),
-          { roomType, channelId, rateType: current.rateType || "custom", price },
-          { merge: true }
-        );
-      }
-      // Refresh to reflect server state
-      fetchData();
-    } catch (e) {
-      console.error("Save rate failed", e);
-      alert("Failed to save rate.");
-    }
-  };
-
+  // ===== UI =====
   return (
-    <div className="container">
-      <h2 className="mt-0 mb-2">Admin Settings</h2>
+    <div className="max-w-6xl mx-auto p-6">
+      <h2 className="text-2xl font-bold mb-6 text-gray-800">⚙️ Admin Settings</h2>
 
       {/* Deposit */}
-      <section className="card">
-        <header className="card-header">
-          <h3>Deposit Per Room</h3>
-        </header>
-        <div className="card-body">
-          <input
-            inputMode="decimal"
+      <Card title="Deposit Per Room">
+        <div className="flex items-center gap-3">
+          <Input
+            type="number"
             value={depositPerRoom}
             onChange={(e) => setDepositPerRoom(e.target.value)}
+            placeholder="Enter amount"
           />
-          <button className="mt-1" onClick={saveDeposit}>Save</button>
+          <Button onClick={saveDeposit}>Save</Button>
         </div>
-      </section>
+      </Card>
 
       {/* Rooms */}
-      <section className="card">
-        <header className="card-header">
-          <h3>Rooms</h3>
-        </header>
-        <div className="card-body">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Number</th>
-                <th>Type</th>
-                <th>Actions</th>
+      <Card title="Rooms">
+        <table className="w-full border-collapse text-sm mb-3">
+          <thead>
+            <tr className="bg-gray-100 text-gray-700">
+              <th className="p-2 text-left">Room #</th>
+              <th className="p-2 text-left">Type</th>
+              <th className="p-2 text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rooms.map((r) => (
+              <tr key={r.id} className="border-t">
+                <td className="p-2">
+                  <input
+                    value={r.roomNumber}
+                    onChange={(e) => updateItem("rooms", r.id, { roomNumber: e.target.value }, PERM.rooms)}
+                    className="border-b border-gray-300 w-full focus:border-blue-500 focus:outline-none"
+                  />
+                </td>
+                <td className="p-2">
+                  <input
+                    value={r.roomType}
+                    onChange={(e) => updateItem("rooms", r.id, { roomType: e.target.value }, PERM.rooms)}
+                    className="border-b border-gray-300 w-full focus:border-blue-500 focus:outline-none"
+                  />
+                </td>
+                <td className="p-2 text-right">
+                  <Button color="red" variant="outline" onClick={() => deleteItem("rooms", r.id, PERM.rooms)}>
+                    Delete
+                  </Button>
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {rooms.map((r) => (
-                <tr key={r.id}>
-                  <td>
-                    <input
-                      value={r.roomNumber ?? ""}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        setRooms((prev) =>
-                          prev.map((x) => (x.id === r.id ? { ...x, roomNumber: v } : x))
-                        );
-                      }}
-                      onBlur={(e) => updateRoom(r.id, "roomNumber", e.target.value)}
-                    />
-                  </td>
-                  <td>
-                    <input
-                      value={r.roomType ?? ""}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        setRooms((prev) =>
-                          prev.map((x) => (x.id === r.id ? { ...x, roomType: v } : x))
-                        );
-                      }}
-                      onBlur={(e) => updateRoom(r.id, "roomType", e.target.value)}
-                    />
-                  </td>
-                  <td>
-                    <button onClick={() => deleteRoom(r.id)}>Delete</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+            ))}
+          </tbody>
+        </table>
 
-          <h4 className="mt-2">Add Room</h4>
-          <input
-            placeholder="Room Number"
-            value={newRoom.roomNumber}
-            onChange={(e) => setNewRoom({ ...newRoom, roomNumber: e.target.value })}
-          />
-          <input
-            placeholder="Room Type"
-            value={newRoom.roomType}
-            onChange={(e) => setNewRoom({ ...newRoom, roomType: e.target.value })}
-          />
-          <button onClick={addRoom}>Add</button>
+        <div className="flex gap-3">
+          <Input placeholder="Room #" value={newRoom.roomNumber} onChange={(e) => setNewRoom({ ...newRoom, roomNumber: e.target.value })} />
+          <Input placeholder="Type" value={newRoom.roomType} onChange={(e) => setNewRoom({ ...newRoom, roomType: e.target.value })} />
+          <Button onClick={() => addItem("rooms", newRoom, PERM.rooms)}>Add</Button>
         </div>
-      </section>
+      </Card>
 
       {/* Channels */}
-      <section className="card">
-        <header className="card-header">
-          <h3>Channels & Rate Types</h3>
-        </header>
-        <div className="card-body">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Rate Type</th>
-                <th>Actions</th>
+      <Card title="Channels & Rate Types">
+        <table className="w-full border-collapse text-sm mb-3">
+          <thead>
+            <tr className="bg-gray-100 text-gray-700">
+              <th className="p-2 text-left">Name</th>
+              <th className="p-2 text-left">Rate Type</th>
+              <th className="p-2 text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {channels.map((c) => (
+              <tr key={c.id} className="border-t">
+                <td className="p-2">
+                  <input
+                    value={c.name}
+                    onChange={(e) => updateItem("channels", c.id, { name: e.target.value }, PERM.channels)}
+                    className="border-b w-full focus:border-blue-500 focus:outline-none"
+                  />
+                </td>
+                <td className="p-2">
+                  <select
+                    value={c.rateType || ""}
+                    onChange={(e) => updateItem("channels", c.id, { rateType: e.target.value }, PERM.channels)}
+                    className="border rounded-md px-2 py-1 w-full"
+                  >
+                    <option value="">Select</option>
+                    {rateTypes.map((rt) => (
+                      <option key={rt.id} value={rt.id}>{rt.label}</option>
+                    ))}
+                  </select>
+                </td>
+                <td className="p-2 text-right">
+                  <Button color="red" variant="outline" onClick={() => deleteItem("channels", c.id, PERM.channels)}>
+                    Delete
+                  </Button>
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {channels.map((c) => (
-                <tr key={c.id}>
-                  <td>
-                    <input
-                      value={c.name ?? ""}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        setChannels((prev) =>
-                          prev.map((x) => (x.id === c.id ? { ...x, name: v } : x))
-                        );
-                      }}
-                      onBlur={(e) => updateChannel(c.id, "name", e.target.value)}
-                    />
-                  </td>
-                  <td>
-                    <select
-                      value={c.rateType ?? ""}
-                      onChange={(e) => updateChannel(c.id, "rateType", e.target.value)}
-                    >
-                      <option value="">Select a rate type</option>
-                      {rateTypes.map((rt) => (
-                        <option key={rt.id} value={rt.id}>
-                          {rt.label}
-                        </option>
-                      ))}
-                    </select>
-                  </td>
-                  <td>
-                    <button onClick={() => deleteChannel(c.id)}>Delete</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+            ))}
+          </tbody>
+        </table>
 
-          <h4 className="mt-2">Add Channel</h4>
-          <input
-            placeholder="Channel Name"
-            value={newChannel.name}
-            onChange={(e) => setNewChannel({ ...newChannel, name: e.target.value })}
-          />
+        <div className="flex gap-3">
+          <Input placeholder="Channel Name" value={newChannel.name} onChange={(e) => setNewChannel({ ...newChannel, name: e.target.value })} />
           <select
+            className="border rounded-md px-2 py-1"
             value={newChannel.rateType}
             onChange={(e) => setNewChannel({ ...newChannel, rateType: e.target.value })}
           >
-            <option value="">Select a rate type</option>
+            <option value="">Select Rate Type</option>
             {rateTypes.map((rt) => (
-              <option key={rt.id} value={rt.id}>
-                {rt.label}
-              </option>
+              <option key={rt.id} value={rt.id}>{rt.label}</option>
             ))}
           </select>
-          <button onClick={addChannel}>Add</button>
+          <Button onClick={() => addItem("channels", newChannel, PERM.channels)}>Add</Button>
         </div>
-      </section>
+      </Card>
 
       {/* Events */}
-      <section className="card">
-        <header className="card-header">
-          <h3>Events</h3>
-        </header>
-        <div className="card-body">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Start</th>
-                <th>End</th>
-                <th>Rate Type</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {events.map((ev) => (
-                <tr key={ev.id}>
-                  <td>
-                    <input
-                      value={ev.name ?? ""}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        setEvents((prev) =>
-                          prev.map((x) => (x.id === ev.id ? { ...x, name: v } : x))
-                        );
-                      }}
-                      onBlur={(e) => updateEvent(ev.id, "name", e.target.value)}
-                    />
-                  </td>
-                  <td>
-                    <input
-  type="date"
-  value={(ev.startDate ?? "").slice(0, 10)}
-  onChange={(e) => updateEvent(ev.id, "startDate", e.target.value)}
-/>
-<input
-  type="date"
-  value={(ev.endDate ?? "").slice(0, 10)}
-  onChange={(e) => updateEvent(ev.id, "endDate", e.target.value)}
-/>
-                  </td>
-                  <td>
-                    <select
-                      value={ev.rateType ?? ""}
-                      onChange={(e) => updateEvent(ev.id, "rateType", e.target.value)}
-                    >
-                      <option value="">Select a rate type</option>
-                      {rateTypes.map((rt) => (
-                        <option key={rt.id} value={rt.id}>
-                          {rt.label}
-                        </option>
-                      ))}
-                    </select>
-                  </td>
-                  <td>
-                    <button onClick={() => deleteEvent(ev.id)}>Delete</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-
-          <h4 className="mt-2">Add Event</h4>
-          <input
-            placeholder="Event Name"
-            value={newEvent.name}
-            onChange={(e) => setNewEvent({ ...newEvent, name: e.target.value })}
-          />
-          <input
-            type="date"
-            value={newEvent.startDate}
-            onChange={(e) => setNewEvent({ ...newEvent, startDate: e.target.value })}
-          />
-          <input
-            type="date"
-            value={newEvent.endDate}
-            onChange={(e) => setNewEvent({ ...newEvent, endDate: e.target.value })}
-          />
-          <select
-            value={newEvent.rateType}
-            onChange={(e) => setNewEvent({ ...newEvent, rateType: e.target.value })}
-          >
-            <option value="">Select a rate type</option>
-            {rateTypes.map((rt) => (
-              <option key={rt.id} value={rt.id}>
-                {rt.label}
-              </option>
-            ))}
-          </select>
-          <button onClick={addEvent}>Add</button>
-        </div>
-      </section>
-
-      {/* Rates (grouped by roomType) */}
-<section className="card">
-  <header className="card-header">
-    <h3>Rates</h3>
-  </header>
-  <div className="card-body">
-    <table className="table rates-table">
-      <thead>
-        <tr>
-          <th>Room Type</th>
-          <th colSpan="2">Direct</th>
-          <th>OTA</th>
-        </tr>
-        <tr>
-          <th></th>
-          <th className="weekday-col">Weekday (Mon–Fri)</th>
-          <th className="weekend-col">Weekend (Sat–Sun)</th>
-          <th className="ota-col">Custom</th>
-        </tr>
-      </thead>
-      <tbody>
-        {[...new Set(rooms.map(r => r.roomType))].map((type) => {
-          const directDoc =
-            rates.find(r => r.roomType === type && r.channelId === "direct") ||
-            { roomType: type, channelId: "direct", weekdayRate: "", weekendRate: "" };
-
-          const otaDoc =
-            rates.find(r => r.roomType === type && r.channelId === "ota") ||
-            { roomType: type, channelId: "ota", price: "", rateType: "custom" };
-
-          return (
-            <tr key={type}>
-              <td>{type}</td>
-              <td className="weekday-col">
-                <input
-                  type="number"
-                  value={directDoc.weekdayRate ?? ""}
-                  onChange={(e) =>
-                    updateRate(type, "direct", { weekdayRate: Number(e.target.value) })
-                  }
-                  onBlur={() => saveRate(type, "direct")}
-                />
-              </td>
-              <td className="weekend-col">
-                <input
-                  type="number"
-                  value={directDoc.weekendRate ?? ""}
-                  onChange={(e) =>
-                    updateRate(type, "direct", { weekendRate: Number(e.target.value) })
-                  }
-                  onBlur={() => saveRate(type, "direct")}
-                />
-              </td>
-              <td className="ota-col">
-                <input
-                  type="number"
-                  value={otaDoc.price ?? ""}
-                  onChange={(e) =>
-                    updateRate(type, "ota", { price: Number(e.target.value), rateType: "custom" })
-                  }
-                  onBlur={() => saveRate(type, "ota")}
-                />
-              </td>
+      <Card title="Events">
+        <table className="w-full border-collapse text-sm mb-3">
+          <thead>
+            <tr className="bg-gray-100 text-gray-700">
+              <th className="p-2 text-left">Name</th>
+              <th className="p-2 text-left">Start</th>
+              <th className="p-2 text-left">End</th>
+              <th className="p-2 text-left">Rate Type</th>
+              <th className="p-2 text-right">Actions</th>
             </tr>
-          );
-        })}
-      </tbody>
-    </table>
-  </div>
-</section>
+          </thead>
+          <tbody>
+            {events.map((ev) => (
+              <tr key={ev.id} className="border-t">
+                <td className="p-2">
+                  <input
+                    value={ev.name}
+                    onChange={(e) => updateItem("events", ev.id, { name: e.target.value }, PERM.events)}
+                    className="border-b w-full"
+                  />
+                </td>
+                <td className="p-2"><input type="date" value={ev.startDate?.slice(0,10) || ""} onChange={(e)=>updateItem("events",ev.id,{startDate:e.target.value},PERM.events)} /></td>
+                <td className="p-2"><input type="date" value={ev.endDate?.slice(0,10) || ""} onChange={(e)=>updateItem("events",ev.id,{endDate:e.target.value},PERM.events)} /></td>
+                <td className="p-2">
+                  <select
+                    value={ev.rateType || ""}
+                    onChange={(e) => updateItem("events", ev.id, { rateType: e.target.value }, PERM.events)}
+                    className="border rounded-md px-2 py-1"
+                  >
+                    <option value="">Select</option>
+                    {rateTypes.map((rt) => (
+                      <option key={rt.id} value={rt.id}>{rt.label}</option>
+                    ))}
+                  </select>
+                </td>
+                <td className="p-2 text-right">
+                  <Button color="red" variant="outline" onClick={() => deleteItem("events", ev.id, PERM.events)}>
+                    Delete
+                  </Button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+
+        <div className="grid grid-cols-5 gap-3">
+          <Input placeholder="Event Name" value={newEvent.name} onChange={(e)=>setNewEvent({...newEvent,name:e.target.value})}/>
+          <Input type="date" value={newEvent.startDate} onChange={(e)=>setNewEvent({...newEvent,startDate:e.target.value})}/>
+          <Input type="date" value={newEvent.endDate} onChange={(e)=>setNewEvent({...newEvent,endDate:e.target.value})}/>
+          <select className="border rounded-md px-2 py-1" value={newEvent.rateType} onChange={(e)=>setNewEvent({...newEvent,rateType:e.target.value})}>
+            <option value="">Select Rate Type</option>
+            {rateTypes.map((rt)=><option key={rt.id} value={rt.id}>{rt.label}</option>)}
+          </select>
+          <Button onClick={()=>addItem("events",newEvent,PERM.events)}>Add</Button>
+        </div>
+      </Card>
+
+      {/* Rates */}
+      <Card title="Rates">
+        <table className="w-full border-collapse text-sm">
+          <thead>
+            <tr className="bg-gray-100 text-gray-700">
+              <th className="p-2 text-left">Room Type</th>
+              <th className="p-2 text-center" colSpan={2}>Direct</th>
+              <th className="p-2 text-center">OTA</th>
+            </tr>
+            <tr className="bg-gray-50 text-xs text-gray-600">
+              <th></th><th>Weekday</th><th>Weekend</th><th>Price</th>
+            </tr>
+          </thead>
+          <tbody>
+            {[...new Set(rooms.map(r=>r.roomType))].map((type)=>{
+              const direct = rates.find(r=>r.roomType===type && r.channelId==="direct")||{};
+              const ota = rates.find(r=>r.roomType===type && r.channelId==="ota")||{};
+              return (
+                <tr key={type} className="border-t">
+                  <td className="p-2 font-medium">{type}</td>
+                  <td className="p-2 text-center"><input type="number" value={direct.weekdayRate||""} onBlur={(e)=>saveRate(type,"direct",{roomType:type,channelId:"direct",weekdayRate:Number(e.target.value),weekendRate:direct.weekendRate||0})} /></td>
+                  <td className="p-2 text-center"><input type="number" value={direct.weekendRate||""} onBlur={(e)=>saveRate(type,"direct",{roomType:type,channelId:"direct",weekdayRate:direct.weekdayRate||0,weekendRate:Number(e.target.value)})} /></td>
+                  <td className="p-2 text-center"><input type="number" value={ota.price||""} onBlur={(e)=>saveRate(type,"ota",{roomType:type,channelId:"ota",price:Number(e.target.value),rateType:"custom"})} /></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </Card>
     </div>
   );
 }
