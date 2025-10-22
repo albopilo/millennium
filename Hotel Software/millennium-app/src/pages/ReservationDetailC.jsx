@@ -185,9 +185,16 @@ function renderTemplateHtml(mode) {
         )}
 
         {/* Printable content */}
-        <div style={{ display: printMode ? "block" : "none" }}>
-          <div ref={printRef} className="printable" dangerouslySetInnerHTML={{ __html: renderTemplateHtml(printMode) }} />
-        </div>
+{typeof printMode === "string" && (
+  <div style={{ display: "block" }}>
+    <div
+      ref={printRef}
+      className="printable"
+      dangerouslySetInnerHTML={{ __html: renderTemplateHtml(printMode) }}
+    />
+  </div>
+)}
+
       </div>
     </div>
   );
