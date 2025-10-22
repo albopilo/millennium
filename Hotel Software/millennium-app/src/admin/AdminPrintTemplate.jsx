@@ -66,7 +66,11 @@ export default function AdminPrintTemplate({ permissions = [] }) {
         </div>
 
         <div style={{ marginBottom: 12 }}>
-          <label>Body (HTML allowed). Use placeholders: {{guestName}}, {{roomNumber}}, {{checkInDate}}, {{checkOutDate}}, {{balance}}, {{staffName}}</label>
+          <label>
+  Body (HTML allowed). Use placeholders: {'{{guestName}}'}, {'{{roomNumber}}'}, {'{{checkInDate}}'},
+  {'{{checkOutDate}}'}, {'{{balance}}'}, {'{{staffName}}'}
+</label>
+
           <textarea rows={8} value={curTpl.body} onChange={(e) => setTemplateData({ ...templateData, [activeTab === "checkIn" ? "checkInTemplate" : "checkOutTemplate"]: { ...curTpl, body: e.target.value }})} style={{ width: "100%" }} />
         </div>
 
