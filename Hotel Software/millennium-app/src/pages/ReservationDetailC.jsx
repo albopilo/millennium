@@ -40,6 +40,7 @@ export default function ReservationDetailC({
   printRef = null,
   printMode = null,
   printCheckOutBill = null,
+  onTemplatesLoaded = null,
   fmt = (d) => (d ? new Date(d).toLocaleString() : "-"),
   guest = null
 }) {
@@ -56,13 +57,23 @@ export default function ReservationDetailC({
         const snap = await getDoc(doc(db, "admin_print_templates", "default"));
         if (snap.exists() && mounted) {
           const data = snap.data();
-          setTemplates({
+setTemplates({
             checkInTemplate: data.checkInTemplate || templates.checkInTemplate,
             checkOutTemplate: data.checkOutTemplate || templates.checkOutTemplate
           });
+          // tell parent we're ready to print (if parent provided a callback)
+          try { if (typeof onTemplatesLoaded === "function") onTemplatesLoaded(); } catch (e) { /* noop */ }
+          return;
+        }
+        // if no doc, still signal ready so parent can print defaults
+        if (mounted) {
+          try { if (typeof onTemplatesLoaded === "function") onTemplatesLoaded(); } catch (e) { /* noop */ }
         }
       } catch (err) {
         console.warn("load templates", err);
+        if (mounted) {
+          try { if (typeof onTemplatesLoaded === "function") onTemplatesLoaded(); } catch (e) { /* noop */ }
+        }
       }
     }
     loadTpl();

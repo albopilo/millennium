@@ -69,6 +69,12 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
   const printRef = useRef(null);
   const [printMode, setPrintMode] = useState(null);
 
+  // When printing we wait for the printable component to signal it's ready (templates loaded)
+  const printReadyResolverRef = useRef(null);
+  function createPrintReadyPromise() {
+    return new Promise((resolve) => { printReadyResolverRef.current = resolve; });
+  }
+
   // defensive refs (prevent concurrent forecast creation)
   const creatingForecastsRef = useRef(false);
   const skippedZeroRateWarningsRef = useRef(new Set());
@@ -566,11 +572,18 @@ async function printCheckInForm() {
       alert("Reservation must be checked-in before printing check-in form.");
       return;
     }
-    // ensure print templates are loaded
+    // create resolver that ReservationDetailC will call when templates/render ready
+    const readyPromise = createPrintReadyPromise();
     setPrintMode("checkin");
-    await new Promise(r => setTimeout(r, 200));
-    window.print();
-    setTimeout(() => setPrintMode(null), 300);
+    try {
+      // wait until child signals ready (timeout fallback in 2s)
+      await Promise.race([readyPromise, new Promise((r) => setTimeout(r, 2000))]);
+      window.print();
+    } finally {
+      // clear print mode a little after print (allow print styles to apply)
+      setTimeout(() => setPrintMode(null), 300);
+      printReadyResolverRef.current = null;
+    }
   }
 
   async function printCheckOutForm() {
@@ -580,10 +593,15 @@ async function printCheckInForm() {
       alert("Reservation must be checked-out before printing check-out form.");
       return;
     }
+    const readyPromise = createPrintReadyPromise();
     setPrintMode("checkout");
-   await new Promise(r => setTimeout(r, 200));
-    window.print();
-    setTimeout(() => setPrintMode(null), 300);
+    try {
+      await Promise.race([readyPromise, new Promise((r) => setTimeout(r, 2000))]);
+      window.print();
+    } finally {
+      setTimeout(() => setPrintMode(null), 300);
+      printReadyResolverRef.current = null;
+    }
   }
 
   // Derived totals
@@ -650,6 +668,12 @@ const fmt = (raw) => {
         <ReservationDetailC
           printRef={printRef}
           printMode={printMode}
+          // child will call this when templates are loaded and printable DOM is ready
+          onTemplatesLoaded={() => {
+            if (printReadyResolverRef.current) {
+              try { printReadyResolverRef.current(); } catch (e) { /* noop */ }
+            }
+          }}
           reservation={reservation}
           settings={settings}
           fmt={fmt}
