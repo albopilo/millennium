@@ -7,90 +7,268 @@ import "../styles/ReservationDetail.css";
 /**
  * AdminPrintTemplate
  *
- * - Edit two separate templates: Check-In and Check-Out.
- * - Each template has: header (HTML), body (HTML), footer (HTML) and style options (font family, size, align, lineHeight).
- * - Live preview with sample data and placeholder insertion.
- * - Persist to Firestore doc: admin_print_templates/default (uses setDoc(..., { merge: true }))
- * - Basic sanitization: strip <script> tags before save and preview.
+ * - Edit and save Check-In and Check-Out templates to Firestore doc: admin_print_templates/default
+ * - Each template contains: header (HTML), body (HTML), footer (HTML) and styles.
+ * - Live preview with sample replacement values. Preview renders template styles inline so they take precedence.
+ * - Supports HTML placeholders ({{roomCharges}}, {{payments}}) and text placeholders.
  *
- * Supported placeholders:
- *   {{guestName}}, {{roomNumber}}, {{checkInDate}}, {{checkOutDate}}, {{balance}}, {{staffName}}
- *
- * UX features:
- *  - Restore defaults per-template
- *  - Insert placeholder at cursor
- *  - Export/import JSON of templates
- *  - Open preview in new window (printable)
- *  - Visual dirty indicator and lastSaved timestamp
+ * Security: we remove <script>...</script> and inline event handlers like onclick before saving/previewing.
+ * (This is *not* a full sanitizer for public content, but it's conservative for admin usage.)
  */
 
 const PLACEHOLDERS = [
   { key: "{{guestName}}", label: "Guest Name" },
   { key: "{{roomNumber}}", label: "Room Number" },
   { key: "{{checkInDate}}", label: "Check-In Date" },
+  { key: "{{checkInTime}}", label: "Check-In DateTime" },
   { key: "{{checkOutDate}}", label: "Check-Out Date" },
-  { key: "{{balance}}", label: "Balance" },
-  { key: "{{staffName}}", label: "Staff Name" }
+  { key: "{{checkOutTime}}", label: "Check-Out DateTime" },
+  { key: "{{guestPhone}}", label: "Guest Phone" },
+  { key: "{{guestEmail}}", label: "Guest Email" },
+  { key: "{{displayName}}", label: "Staff Display Name" },
+  { key: "{{staffEmail}}", label: "Staff Email" },
+  { key: "{{roomCharges}}", label: "Room Charges (table rows HTML)" },
+  { key: "{{payments}}", label: "Payments (table rows HTML)" },
+  { key: "{{totalCharge}}", label: "Total Charges" },
+  { key: "{{totalPayment}}", label: "Total Payments" },
+  { key: "{{balance}}", label: "Remaining Balance" },
+  { key: "{{timestamp}}", label: "Now Timestamp" }
 ];
 
-// sensible default templates (not a copy of user's example)
 const DEFAULT_TEMPLATES = {
   checkInTemplate: {
-    header: `<div style="font-weight:700; font-size:18px;">HOTEL NAME</div>
-<div style="font-size:12px;">Jl. Example No. 1 — City — Country</div>`,
-    body: `<p><strong>Guest:</strong> {{guestName}}</p>
-<p><strong>Room:</strong> {{roomNumber}}</p>
-<p><strong>Check-in:</strong> {{checkInDate}}</p>
-<p><strong>Check-out:</strong> {{checkOutDate}}</p>
-<hr/>
-<p>Please sign below to acknowledge arrival and any deposits.</p>`,
-    footer: `<div style="font-size:12px;">Staff: {{staffName}}</div>`,
+    header: `
+      <div style="display:flex; align-items:center; justify-content:space-between;">
+        <div>
+          <div style="font-size:20px; font-weight:700;">Millennium Inn</div>
+          <div style="font-size:12px; color:#374151;">Jl. Setia Luhur No. 81, Medan — Sumatera Utara</div>
+          <div style="font-size:12px; color:#374151;">Telp. 082217091699 | Email: fo.millennium1@gmail.com</div>
+        </div>
+        <div style="font-weight:700; font-size:16px; text-align:right;">Check-In Form</div>
+      </div>
+    `,
+    body: `
+      <div style="margin-top:8px;">
+        <table style="width:100%; border-collapse:collapse; margin-bottom:8px;">
+          <tbody>
+            <tr>
+              <td style="width:130px;">Guest Name</td><td>: <strong>{{guestName}}</strong></td>
+              <td style="width:130px;">Room</td><td>: <strong>{{roomNumber}}</strong></td>
+            </tr>
+            <tr>
+              <td>Check-In</td><td>: {{checkInTime}}</td>
+              <td>Check-Out</td><td>: {{checkOutTime}}</td>
+            </tr>
+            <tr>
+              <td>Phone</td><td>: {{guestPhone}}</td>
+              <td>Email</td><td>: {{guestEmail}}</td>
+            </tr>
+            <tr>
+              <td>Handled By</td><td>: {{displayName}}</td>
+              <td>Staff Email</td><td>: {{staffEmail}}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <hr style="border:none; border-top:1px solid #e5e7eb; margin:8px 0;"/>
+
+        <div style="font-weight:700; margin-bottom:6px;">Stay Summary</div>
+        <table style="width:100%; border-collapse:collapse;" border="1" cellspacing="0" cellpadding="4">
+          <thead style="background:#f3f4f6;">
+            <tr>
+              <th style="width:6%; text-align:center;">#</th>
+              <th style="text-align:left;">Description</th>
+              <th style="width:16%; text-align:right;">Rate</th>
+              <th style="width:8%; text-align:center;">Qty</th>
+              <th style="width:16%; text-align:right;">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{roomCharges}}
+          </tbody>
+          <tfoot>
+            <tr>
+              <td colspan="4" style="text-align:right; font-weight:700;">Total Charges</td>
+              <td style="text-align:right; font-weight:700;">{{totalCharge}}</td>
+            </tr>
+          </tfoot>
+        </table>
+
+        <div style="margin-top:12px;">
+          <div style="font-weight:700; margin-bottom:6px;">Payment / Deposit Information</div>
+          <table style="width:100%; border-collapse:collapse;" border="1" cellspacing="0" cellpadding="4">
+            <thead style="background:#fafafa;">
+              <tr>
+                <th style="width:40%;">Method</th>
+                <th style="width:40%;">Reference / Notes</th>
+                <th style="width:20%; text-align:right;">Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              {{payments}}
+            </tbody>
+            <tfoot>
+              <tr>
+                <td colspan="2" style="text-align:right; font-weight:700;">Total Payment</td>
+                <td style="text-align:right; font-weight:700;">{{totalPayment}}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+
+        <div style="margin-top:14px; font-weight:700;">Remaining Balance: <span style="color:#dc2626;">{{balance}}</span></div>
+
+        <div style="margin-top:16px; font-size:12px; color:#374151;">
+          <strong>Guest Declaration:</strong>
+          <p style="margin:6px 0 0 0;">
+            I hereby agree to comply with hotel rules, settle all bills before check-out and acknowledge the hotel's policy regarding valuables.
+          </p>
+        </div>
+      </div>
+    `,
+    footer: `
+      <div style="display:flex; justify-content:space-between; margin-top:24px;">
+        <div style="width:45%; text-align:center;">
+          <div><strong>Guest Signature</strong></div>
+          <div style="margin-top:48px;">( {{guestName}} )</div>
+        </div>
+        <div style="width:45%; text-align:center;">
+          <div><strong>Front Desk Staff</strong></div>
+          <div style="margin-top:48px;">( {{displayName}} )</div>
+        </div>
+      </div>
+    `,
     styles: {
-      fontFamily: "Arial, sans-serif",
-      fontSize: 12,
+      fontFamily: "'Helvetica Neue', Arial, sans-serif",
+      fontSize: 13,
       textAlign: "left",
-      lineHeight: 1.4,
-      color: "#111"
+      lineHeight: 1.45,
+      color: "#111827"
     }
   },
   checkOutTemplate: {
-    header: `<div style="font-weight:700; font-size:18px;">HOTEL NAME</div>
-<div style="font-size:12px;">Address — City — Country</div>`,
-    body: `<p><strong>Guest:</strong> {{guestName}}</p>
-<p><strong>Room:</strong> {{roomNumber}}</p>
-<p><strong>Check-in:</strong> {{checkInDate}} — <strong>Check-out:</strong> {{checkOutDate}}</p>
-<hr/>
-<p><strong>Balance Due:</strong> {{balance}}</p>
-<p>Thank you for staying with us.</p>`,
-    footer: `<div style="font-size:12px;">Processed by: {{staffName}}</div>`,
+    header: `
+      <div style="display:flex; align-items:center; justify-content:space-between;">
+        <div>
+          <div style="font-size:20px; font-weight:700;">Millennium Inn</div>
+          <div style="font-size:12px; color:#374151;">Jl. Setia Luhur No. 81, Medan — Sumatera Utara</div>
+          <div style="font-size:12px; color:#374151;">Telp. 082217091699 | Email: fo.millennium1@gmail.com</div>
+        </div>
+        <div style="font-weight:700; font-size:16px; text-align:right; color:#0f172a;">Check-Out Form</div>
+      </div>
+    `,
+    body: `
+      <div style="margin-top:8px;">
+        <table style="width:100%; border-collapse:collapse; margin-bottom:8px;">
+          <tbody>
+            <tr>
+              <td style="width:130px;">Guest Name</td><td>: <strong>{{guestName}}</strong></td>
+              <td style="width:130px;">Room</td><td>: <strong>{{roomNumber}}</strong></td>
+            </tr>
+            <tr>
+              <td>Check-In</td><td>: {{checkInTime}}</td>
+              <td>Check-Out</td><td>: {{checkOutTime}}</td>
+            </tr>
+            <tr>
+              <td>Phone</td><td>: {{guestPhone}}</td>
+              <td>Email</td><td>: {{guestEmail}}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <hr style="border:none; border-top:1px solid #e5e7eb; margin:8px 0;"/>
+
+        <div style="font-weight:700; margin-bottom:6px;">Itemized Charges</div>
+        <table style="width:100%; border-collapse:collapse;" border="1" cellspacing="0" cellpadding="4">
+          <thead style="background:#f8fafc;">
+            <tr>
+              <th style="width:6%; text-align:center;">#</th>
+              <th style="text-align:left;">Description</th>
+              <th style="width:16%; text-align:right;">Rate</th>
+              <th style="width:8%; text-align:center;">Qty</th>
+              <th style="width:16%; text-align:right;">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{roomCharges}}
+          </tbody>
+          <tfoot>
+            <tr>
+              <td colspan="4" style="text-align:right; font-weight:700;">Total Charges</td>
+              <td style="text-align:right; font-weight:700;">{{totalCharge}}</td>
+            </tr>
+          </tfoot>
+        </table>
+
+        <div style="margin-top:12px;">
+          <div style="font-weight:700; margin-bottom:6px;">Payments</div>
+          <table style="width:100%; border-collapse:collapse;" border="1" cellspacing="0" cellpadding="4">
+            <thead style="background:#fafafa;">
+              <tr>
+                <th style="width:60%;">Method / Notes</th>
+                <th style="width:40%; text-align:right;">Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              {{payments}}
+            </tbody>
+            <tfoot>
+              <tr>
+                <td style="text-align:right; font-weight:700;">Total Payment</td>
+                <td style="text-align:right; font-weight:700;">{{totalPayment}}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+
+        <div style="margin-top:16px; padding:10px; border:1px dashed #fecaca; background:#fff7f7;">
+          <div style="font-weight:800; color:#b91c1c; font-size:16px;">Remaining Balance: {{balance}}</div>
+        </div>
+
+        <div style="margin-top:14px; font-size:12px; color:#374151;">
+          <p style="margin:6px 0 0 0;">Thank you for staying with us. We hope to see you again.</p>
+        </div>
+      </div>
+    `,
+    footer: `
+      <div style="display:flex; justify-content:space-between; margin-top:24px;">
+        <div style="width:45%; text-align:center;">
+          <div><strong>Guest Signature</strong></div>
+          <div style="margin-top:48px;">( {{guestName}} )</div>
+        </div>
+        <div style="width:45%; text-align:center;">
+          <div><strong>Front Desk Staff</strong></div>
+          <div style="margin-top:48px;">( {{displayName}} )</div>
+        </div>
+      </div>
+    `,
     styles: {
-      fontFamily: "Arial, sans-serif",
-      fontSize: 12,
+      fontFamily: "'Helvetica Neue', Arial, sans-serif",
+      fontSize: 13,
       textAlign: "left",
-      lineHeight: 1.4,
-      color: "#111"
+      lineHeight: 1.45,
+      color: "#0f172a"
     }
   }
 };
 
 function stripScriptTags(html = "") {
   if (!html) return "";
-  // remove <script ...>...</script> and on*="" attributes which can execute JS in some contexts
+  // basic sanitize: remove script tags and inline event handlers (onclick etc.)
   let out = html.replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, "");
-  // remove inline event handlers (very conservative)
-  out = out.replace(/\son\w+=(?:"[^"]*"|'[^']*'|\S+)/gi, "");
+  out = out.replace(/\s(on\w+)\s*=\s*(".*?"|'.*?'|\S+)/gi, "");
   return out;
 }
 
 export default function AdminPrintTemplate() {
-  const [activeTab, setActiveTab] = useState("checkIn"); // "checkIn" | "checkOut"
+  const [activeTab, setActiveTab] = useState("checkIn"); // checkIn | checkOut
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [templateData, setTemplateData] = useState(DEFAULT_TEMPLATES);
   const [dirty, setDirty] = useState(false);
   const [lastSavedAt, setLastSavedAt] = useState(null);
-  const bodyRef = useRef(null); // textarea ref for inserting placeholders
-  const fileInputRef = useRef(null);
+  const bodyRef = useRef(null);
+  const fileRef = useRef(null);
 
   // load templates from Firestore on mount
   useEffect(() => {
@@ -107,13 +285,13 @@ export default function AdminPrintTemplate() {
             checkOutTemplate: { ...DEFAULT_TEMPLATES.checkOutTemplate, ...(remote.checkOutTemplate || {}) }
           });
           setDirty(false);
-          setLastSavedAt(new Date()); // we don't know exact time, but indicate loaded
+          setLastSavedAt(new Date());
         } else {
           setTemplateData(DEFAULT_TEMPLATES);
           setDirty(true);
         }
       } catch (err) {
-        console.error("Failed to load print templates:", err);
+        console.error("AdminPrintTemplate load error:", err);
       } finally {
         setLoading(false);
       }
@@ -126,7 +304,7 @@ export default function AdminPrintTemplate() {
   const curTpl = templateData[curKey] || DEFAULT_TEMPLATES[curKey];
 
   function updateCurTemplate(patch) {
-    setTemplateData((prev) => {
+    setTemplateData(prev => {
       const next = { ...prev, [curKey]: { ...(prev[curKey] || {}), ...patch } };
       setDirty(true);
       return next;
@@ -134,14 +312,13 @@ export default function AdminPrintTemplate() {
   }
 
   function updateCurStyle(patch) {
-    const styles = { ...(curTpl.styles || {}), ...patch };
-    updateCurTemplate({ styles });
+    updateCurTemplate({ styles: { ...(curTpl.styles || {}), ...patch } });
   }
 
+  // insert placeholder at textarea cursor
   function insertPlaceholderAtCursor(placeholder) {
     const ta = bodyRef.current;
     if (!ta) {
-      // fallback: append to body
       updateCurTemplate({ body: (curTpl.body || "") + placeholder });
       return;
     }
@@ -150,19 +327,15 @@ export default function AdminPrintTemplate() {
     const val = ta.value || "";
     const next = val.slice(0, start) + placeholder + val.slice(end);
     updateCurTemplate({ body: next });
-    // restore focus and cursor after render
+    // restore focus position
     setTimeout(() => {
-      try {
-        ta.focus();
-        const pos = start + placeholder.length;
-        ta.setSelectionRange(pos, pos);
-      } catch (e) {}
+      try { ta.focus(); ta.setSelectionRange(start + placeholder.length, start + placeholder.length); } catch (e) {}
     }, 0);
   }
 
   function restoreDefaultsForActive() {
-    if (!window.confirm("Restore default content for this template? This will overwrite current unsaved changes.")) return;
-    setTemplateData((prev) => {
+    if (!window.confirm("Restore default content for this template? Unsaved changes will be lost.")) return;
+    setTemplateData(prev => {
       const next = { ...prev, [curKey]: DEFAULT_TEMPLATES[curKey] };
       setDirty(true);
       return next;
@@ -171,24 +344,23 @@ export default function AdminPrintTemplate() {
 
   function validateTemplate(tpl) {
     const issues = [];
-    if (!tpl.header || tpl.header.trim() === "") issues.push("Header is empty");
-    if (!tpl.body || tpl.body.trim() === "") issues.push("Body is empty");
-    if (!tpl.footer || tpl.footer.trim() === "") issues.push("Footer is empty");
-    // optional: warn if no placeholders included
-    const placeholdersFound = PLACEHOLDERS.some(p => (tpl.header + tpl.body + tpl.footer).includes(p.key));
-    if (!placeholdersFound) issues.push("No placeholders found — preview will be static");
+    if (!tpl.header || !String(tpl.header).trim()) issues.push("Header empty");
+    if (!tpl.body || !String(tpl.body).trim()) issues.push("Body empty");
+    if (!tpl.footer || !String(tpl.footer).trim()) issues.push("Footer empty");
     return issues;
   }
 
   async function saveTemplates() {
     try {
       setSaving(true);
-      // basic validation
       const tpl = templateData[curKey] || {};
       const issues = validateTemplate(tpl);
       if (issues.length > 0) {
-        const cont = window.confirm(`Template warnings:\n- ${issues.join("\n- ")}\n\nSave anyway?`);
-        if (!cont) return;
+        const ok = window.confirm("Template warnings:\n- " + issues.join("\n- ") + "\n\nSave anyway?");
+        if (!ok) {
+          setSaving(false);
+          return;
+        }
       }
 
       const payload = {
@@ -211,14 +383,14 @@ export default function AdminPrintTemplate() {
       setLastSavedAt(new Date());
       alert("Templates saved.");
     } catch (err) {
-      console.error("Failed to save templates:", err);
+      console.error("saveTemplates error:", err);
       alert("Save failed: " + (err.message || err));
     } finally {
       setSaving(false);
     }
   }
 
-  // export current templates as JSON file
+  // export/import JSON helpers
   function exportJson() {
     const payload = JSON.stringify(templateData, null, 2);
     const blob = new Blob([payload], { type: "application/json" });
@@ -230,85 +402,107 @@ export default function AdminPrintTemplate() {
     URL.revokeObjectURL(url);
   }
 
-  // import templates from a JSON file
   function onImportFile(e) {
-    const f = e.target.files && e.target.files[0];
+    const f = e.target.files?.[0];
     if (!f) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
+    const r = new FileReader();
+    r.onload = (ev) => {
       try {
-        const obj = JSON.parse(String(ev.target.result));
-        if (obj && (obj.checkInTemplate || obj.checkOutTemplate)) {
-          setTemplateData({
-            checkInTemplate: { ...DEFAULT_TEMPLATES.checkInTemplate, ...(obj.checkInTemplate || {}) },
-            checkOutTemplate: { ...DEFAULT_TEMPLATES.checkOutTemplate, ...(obj.checkOutTemplate || {}) }
-          });
-          setDirty(true);
-          alert("Imported templates into editor. Don't forget to Save to persist to Firestore.");
-        } else {
-          alert("Invalid template JSON format.");
+        const json = JSON.parse(String(ev.target.result));
+        if (!json || (!json.checkInTemplate && !json.checkOutTemplate)) {
+          alert("Invalid template JSON");
+          return;
         }
+        setTemplateData({
+          checkInTemplate: { ...DEFAULT_TEMPLATES.checkInTemplate, ...(json.checkInTemplate || {}) },
+          checkOutTemplate: { ...DEFAULT_TEMPLATES.checkOutTemplate, ...(json.checkOutTemplate || {}) }
+        });
+        setDirty(true);
+        alert("Imported into editor — click Save to persist.");
       } catch (err) {
         alert("Failed to parse JSON file: " + (err.message || err));
       }
     };
-    reader.readAsText(f);
-    // reset input
+    r.readAsText(f);
     e.target.value = "";
   }
 
-  // sample data used for preview replacement
-const sampleData = useMemo(() => ({
-    guestName: "Sample Guest",
-    roomNumber: "107 - Standard Room",
-    checkInDate: "20/02/2025",
-    checkInTime: "20/02/2025 17:53",
-    checkOutDate: "21/02/2025",
-    checkOutTime: "21/02/2025 12:00",
-    staffName: "Edo",
+  // sample preview data (used in live preview)
+  const sampleData = useMemo(() => ({
+    guestName: "Aa Susilo",
+    roomNumber: "317 - Standard",
+    checkInDate: new Date().toLocaleDateString(),
+    checkInTime: new Date().toLocaleString(),
+    checkOutDate: new Date(Date.now() + 24 * 3600 * 1000).toLocaleDateString(),
+    checkOutTime: new Date(Date.now() + 24 * 3600 * 1000).toLocaleString(),
+    guestPhone: "0812-3456-7890",
+    guestEmail: "aa@example.com",
+    displayName: "Edo",
     staffEmail: "edo@millenniuminn.com",
-    totalCharge: "IDR 300.000",
-    totalPayment: "IDR 150.000",
-    balance: "IDR 150.000",
-    paymentMethod: "Credit Card",
+    // roomCharges and payments contain table rows HTML (for preview only)
     roomCharges: `
-      <tr><td style="text-align:center;">1</td><td>Room 107 — Standard Room</td><td style="text-align:right;">150,000</td><td style="text-align:center;">1</td><td style="text-align:right;">150,000</td></tr>
-      <tr><td style="text-align:center;">2</td><td>Breakfast Add-on</td><td style="text-align:right;">50,000</td><td style="text-align:center;">1</td><td style="text-align:right;">50,000</td></tr>
+      <tr>
+        <td style="text-align:center;">1</td>
+        <td>Room 317 — Standard</td>
+        <td style="text-align:right;">150,000</td>
+        <td style="text-align:center;">1</td>
+        <td style="text-align:right;">150,000</td>
+      </tr>
+      <tr>
+        <td style="text-align:center;">2</td>
+        <td>Breakfast</td>
+        <td style="text-align:right;">50,000</td>
+        <td style="text-align:center;">1</td>
+        <td style="text-align:right;">50,000</td>
+      </tr>
     `,
     payments: `
-      <tr><td>Credit Card</td><td>VISA #1234</td><td style="text-align:right;">150,000</td></tr>
-    `
+      <tr>
+        <td>Credit Card - VISA</td><td style="text-align:right;">150,000</td>
+      </tr>
+    `,
+    totalCharge: "IDR 200.000",
+    totalPayment: "IDR 150.000",
+    balance: "IDR 50.000",
+    timestamp: new Date().toLocaleString()
   }), []);
 
-  function renderWithPlaceholders(html) {
+  // replace placeholders in given html; allow some placeholders to contain HTML (roomCharges/payments)
+  function renderWithPlaceholders(html, data = {}) {
     if (!html) return "";
     let out = String(html);
-    // minimal replacement
-Object.entries(sampleData).forEach(([k, v]) => {
-      out = out.split(`{{\${k}}}`).join(String(v));
+
+    // replace all keys with provided data
+    Object.keys(data).forEach(k => {
+      const token = `{{${k}}}`;
+      const value = data[k] != null ? String(data[k]) : "";
+      out = out.split(token).join(value);
     });
-    // optional clean-up for unused placeholders
-    out = out.replace(/{{\s*\w+\s*}}/g, "—");
+
+    // clear any remaining unknown placeholders to a visible dash
+    out = out.replace(/{{\s*[\w]+\s*}}/g, "—");
     return out;
   }
 
+  // assembled HTML preview (applies template style inline to ensure it's used)
   const previewHtml = useMemo(() => {
     const tpl = templateData[curKey] || DEFAULT_TEMPLATES[curKey];
     const s = tpl.styles || {};
-const header = renderWithPlaceholders(tpl.header || "");
-const body = renderWithPlaceholders(tpl.body || "");
-const footer = renderWithPlaceholders(tpl.footer || "");
+    const wrapperStyle = [
+      `font-family: ${s.fontFamily || "Arial, sans-serif"}`,
+      `font-size: ${(s.fontSize || 12)}px`,
+      `line-height: ${s.lineHeight || 1.4}`,
+      `text-align: ${s.textAlign || "left"}`,
+      `color: ${s.color || "#111"}`
+    ].join("; ");
 
-return `
-  <div class="print-template">
-    ${header}
-    ${body}
-    ${footer}
-  </div>
-`;
+    const header = renderWithPlaceholders(tpl.header || "", sampleData);
+    const body = renderWithPlaceholders(tpl.body || "", sampleData);
+    const footer = renderWithPlaceholders(tpl.footer || "", sampleData);
+
+    return `<div style="${wrapperStyle}">${header}<div style="margin-top:8px;">${body}</div>${footer}</div>`;
   }, [templateData, curKey, sampleData]);
 
-  // open preview in a new window and (optionally) print
   function openPreviewWindow(doPrint = false) {
     const tpl = templateData[curKey] || DEFAULT_TEMPLATES[curKey];
     const win = window.open("", "_blank", "toolbar=0,location=0,menubar=0");
@@ -316,21 +510,26 @@ return `
       alert("Popup blocked. Allow popups to preview/print.");
       return;
     }
-    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Print Preview</title>
-      <style>body{margin:20px;font-family:${tpl.styles?.fontFamily || "Arial, sans-serif"};color:${tpl.styles?.color || "#111"};}</style>
-      </head><body>${previewHtml}</body></html>`;
-    win.document.write(html);
+    const s = tpl.styles || {};
+    const bodyHTML = previewHtml;
+    const docHtml = `<!doctype html><html><head><meta charset="utf-8"><title>Print Preview</title>
+      <style>
+        @page { margin: 18mm; }
+        body { margin: 10mm; -webkit-print-color-adjust: exact; }
+        table { font-size: ${s.fontSize || 12}px; border-collapse: collapse; }
+      </style>
+      </head><body>${bodyHTML}</body></html>`;
+    win.document.write(docHtml);
     win.document.close();
     if (doPrint) {
-      setTimeout(() => {
-        try { win.focus(); win.print(); } catch (e) { console.warn(e); }
-      }, 350);
+      setTimeout(() => { try { win.focus(); win.print(); } catch (e) { console.warn(e); } }, 350);
     }
   }
 
+  // component render
   return (
     <div className="reservation-detail-container card" style={{ maxWidth: 1200 }}>
-      <div className="card-header">
+      <div className="card-header" style={{ alignItems: "center" }}>
         <h3 style={{ margin: 0 }}>Print Templates (Admin)</h3>
         <div style={{ display: "flex", gap: 8 }}>
           <button className={`btn ${activeTab === "checkIn" ? "btn-primary" : ""}`} onClick={() => setActiveTab("checkIn")}>Check-In</button>
@@ -339,7 +538,7 @@ return `
       </div>
 
       <div className="card-body" style={{ display: "grid", gridTemplateColumns: "1fr 420px", gap: 18 }}>
-        {/* Left column: Editor */}
+        {/* Editor (left) */}
         <div>
           <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
             <strong>{activeTab === "checkIn" ? "Check-In Template" : "Check-Out Template"}</strong>
@@ -370,7 +569,6 @@ return `
                   insertPlaceholderAtCursor(val);
                   e.target.value = "";
                 }}
-                aria-label="Insert placeholder"
               >
                 <option value="">Insert placeholder…</option>
                 {PLACEHOLDERS.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
@@ -378,9 +576,9 @@ return `
 
               <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
                 Font:
-                <select value={curTpl.styles?.fontFamily || "Arial, sans-serif"} onChange={(e) => updateCurStyle({ fontFamily: e.target.value })}>
+                <select value={curTpl.styles?.fontFamily || "'Helvetica Neue', Arial, sans-serif"} onChange={(e) => updateCurStyle({ fontFamily: e.target.value })}>
+                  <option value="'Helvetica Neue', Arial, sans-serif">Helvetica</option>
                   <option value="Arial, sans-serif">Arial</option>
-                  <option value="Helvetica, Arial, sans-serif">Helvetica</option>
                   <option value="Georgia, serif">Georgia</option>
                   <option value="Times New Roman, Times, serif">Times</option>
                   <option value="Courier New, monospace">Courier</option>
@@ -389,7 +587,7 @@ return `
 
               <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
                 Size:
-                <input type="number" min="8" max="36" value={curTpl.styles?.fontSize || 12} onChange={(e) => updateCurStyle({ fontSize: Number(e.target.value || 12) })} style={{ width: 72 }} />
+                <input type="number" min="8" max="36" value={curTpl.styles?.fontSize || 13} onChange={(e) => updateCurStyle({ fontSize: Number(e.target.value || 13) })} style={{ width: 72 }} />
               </label>
 
               <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
@@ -404,7 +602,7 @@ return `
 
             <textarea
               ref={bodyRef}
-              rows={12}
+              rows={14}
               style={{ width: "100%", padding: 8, boxSizing: "border-box", fontFamily: "monospace", fontSize: 13 }}
               value={curTpl.body || ""}
               onChange={(e) => updateCurTemplate({ body: e.target.value })}
@@ -428,13 +626,13 @@ return `
 
             <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
               <button className="btn" onClick={exportJson}>Export JSON</button>
-              <input ref={fileInputRef} type="file" accept=".json,application/json" style={{ display: "none" }} onChange={onImportFile} />
-              <button className="btn" onClick={() => fileInputRef.current && fileInputRef.current.click()}>Import JSON</button>
+              <input ref={fileRef} type="file" accept=".json,application/json" style={{ display: "none" }} onChange={onImportFile} />
+              <button className="btn" onClick={() => fileRef.current && fileRef.current.click()}>Import JSON</button>
             </div>
           </div>
         </div>
 
-        {/* Right column: Preview */}
+        {/* Preview (right) */}
         <div style={{ borderLeft: "1px solid #eef2ff", paddingLeft: 12 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
             <strong>Live Preview</strong>
