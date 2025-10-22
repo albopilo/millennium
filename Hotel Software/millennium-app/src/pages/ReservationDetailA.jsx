@@ -52,50 +52,89 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
     isNaN(n) ? "-" : Number(n).toLocaleString("id-ID", { minimumFractionDigits: 0 });
 
   // --- Data loading ---
-  async function loadAll() {
-    if (!id) return;
-    setLoading(true);
-    try {
-      const [resSnap, roomsSnap, settingsSnap] = await Promise.all([
-        getDoc(doc(db, "reservations", id)),
-        getDocs(collection(db, "rooms")),
-        getDoc(doc(db, "settings", "general")),
-      ]);
+async function loadAll() {
+  if (!id) return;
+  setLoading(true);
 
-      if (!resSnap.exists()) {
-        navigate("/calendar");
-        return;
-      }
+  try {
+    // Fetch reservation, rooms, and general settings in parallel
+    const [resSnap, roomsSnap, settingsSnap] = await Promise.all([
+      getDoc(doc(db, "reservations", id)),
+      getDocs(collection(db, "rooms")),
+      getDoc(doc(db, "settings", "general")),
+    ]);
 
-      const r = { id: resSnap.id, ...resSnap.data() };
-      setReservation(r);
-      setRooms(roomsSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
-      if (settingsSnap.exists()) setSettings(settingsSnap.data());
-
-      // Load guest if any
-      if (r.guestId) {
-        const gSnap = await getDoc(doc(db, "guests", r.guestId));
-        if (gSnap.exists()) setGuest({ id: gSnap.id, ...gSnap.data() });
-      }
-
-      // Load related collections
-      const [pSnap, paySnap, sSnap] = await Promise.all([
-        getDocs(query(collection(db, "postings"), where("reservationId", "==", id))),
-        getDocs(query(collection(db, "payments"), where("reservationId", "==", id))),
-        getDocs(query(collection(db, "stays"), where("reservationId", "==", id))),
-      ]);
-      setPostings(pSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
-      setPayments(paySnap.docs.map((d) => ({ id: d.id, ...d.data() })));
-      setStays(sSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
-      setAssignRooms(Array.isArray(r.roomNumbers) ? [...r.roomNumbers] : []);
-    } catch (err) {
-      console.error("loadAll error:", err);
-    } finally {
-      setLoading(false);
+    if (!resSnap.exists()) {
+      navigate("/calendar");
+      return;
     }
-  }
 
-  useEffect(() => { loadAll(); }, [id]);
+    // Build reservation object
+    const rData = resSnap.data();
+    const r = {
+      id: resSnap.id,
+      ...rData,
+      // Convert Firestore timestamps to JS Date
+      checkInDate:
+        rData.checkInDate?.toDate?.() ||
+        (rData.checkInDate?.seconds ? new Date(rData.checkInDate.seconds * 1000) : null),
+      checkOutDate:
+        rData.checkOutDate?.toDate?.() ||
+        (rData.checkOutDate?.seconds ? new Date(rData.checkOutDate.seconds * 1000) : null),
+    };
+    setReservation(r);
+
+    // Set rooms
+    setRooms(roomsSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
+
+    // Set settings
+    if (settingsSnap.exists()) setSettings(settingsSnap.data());
+
+    // Load guest if exists
+    if (r.guestId) {
+      const gSnap = await getDoc(doc(db, "guests", r.guestId));
+      if (gSnap.exists()) setGuest({ id: gSnap.id, ...gSnap.data() });
+    }
+
+    // Load postings, payments, stays
+    const [pSnap, paySnap, sSnap] = await Promise.all([
+      getDocs(query(collection(db, "postings"), where("reservationId", "==", id))),
+      getDocs(query(collection(db, "payments"), where("reservationId", "==", id))),
+      getDocs(query(collection(db, "stays"), where("reservationId", "==", id))),
+    ]);
+
+    const allPostings = pSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const allPayments = paySnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const allStays = sSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+
+    setPostings(allPostings);
+    setPayments(allPayments);
+    setStays(allStays);
+
+    // Filter assignRooms
+    setAssignRooms(Array.isArray(r.roomNumbers) ? [...r.roomNumbers] : []);
+
+    // --- Calculate totals ---
+    const visiblePostings = allPostings.filter((p) => (p.status || "").toLowerCase() !== "void");
+    const charges = visiblePostings.filter((p) => (p.accountCode || "").toUpperCase() !== "PAY");
+    const paymentsFiltered = allPayments.filter((p) => (p.status || "").toLowerCase() !== "void");
+
+    const totalCharges = charges.reduce((sum, c) => sum + Number(c.amount || 0), 0);
+    const totalPayments = paymentsFiltered.reduce((sum, p) => sum + Number(p.amount || 0), 0);
+    const balance = totalCharges - totalPayments;
+
+    // Store totals in state (optional)
+    setReservation((prev) => ({
+      ...prev,
+      totals: { totalCharges, totalPayments, balance },
+    }));
+  } catch (err) {
+    console.error("loadAll error:", err);
+  } finally {
+    setLoading(false);
+  }
+}
+
 
   // Live logs subscription
   useEffect(() => {
@@ -232,15 +271,16 @@ printCheckOutBill: () => printCheckOutBill(
       <h2 className="text-2xl font-bold text-gray-800">Reservation Detail</h2>
 
       <ReservationDetailB {...childProps}>
-        <ReservationDetailC
-          reservation={reservation}
-          displayChargeLines={charges}
-          displayChargesTotal={totalCharges}
-          displayPaymentsTotal={totalPayments}
-          displayBalance={balance}
-          currency={settings.currency}
-          fmtMoney={fmtMoney}
-        />
+<ReservationDetailC
+  reservation={reservation}
+  displayChargeLines={postings.filter(p => (p.status||"").toLowerCase() !== "void" && (p.accountCode||"").toUpperCase() !== "PAY")}
+  displayChargesTotal={reservation?.totals?.totalCharges || 0}
+  displayPaymentsTotal={reservation?.totals?.totalPayments || 0}
+  displayBalance={reservation?.totals?.balance || 0}
+  currency={settings.currency}
+  fmtMoney={fmtMoney}
+/>
+
       </ReservationDetailB>
     </div>
   );
