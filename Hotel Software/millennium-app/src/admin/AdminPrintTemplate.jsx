@@ -280,17 +280,17 @@ export default function AdminPrintTemplate() {
   const previewHtml = useMemo(() => {
     const tpl = templateData[curKey] || DEFAULT_TEMPLATES[curKey];
     const s = tpl.styles || {};
-    const style = `font-family:${s.fontFamily || "Arial, sans-serif"}; font-size:${(s.fontSize || 12)}px; line-height:${s.lineHeight || 1.4}; text-align:${s.textAlign || "left"}; color:${s.color || "#111"};`;
-    const header = renderWithPlaceholders(tpl.header || "");
-    const body = renderWithPlaceholders(tpl.body || "");
-    const footer = renderWithPlaceholders(tpl.footer || "");
-    return `<div style="${style}">
-      <div class="print-header">${header}</div>
-      <hr/>
-      <div class="print-body" style="margin:12px 0;">${body}</div>
-      <hr/>
-      <div class="print-footer" style="margin-top:8px;">${footer}</div>
-    </div>`;
+const header = renderWithPlaceholders(tpl.header || "");
+const body = renderWithPlaceholders(tpl.body || "");
+const footer = renderWithPlaceholders(tpl.footer || "");
+
+return `
+  <div class="print-template">
+    ${header}
+    ${body}
+    ${footer}
+  </div>
+`;
   }, [templateData, curKey, sampleData]);
 
   // open preview in a new window and (optionally) print
