@@ -1,24 +1,37 @@
 // src/pages/FrontDeskCheckIn.jsx
-import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import { collection, getDocs, query, where } from "firebase/firestore";
-import { db } from "../firebase";
-import { startOfDayStr, endOfDayStr, todayStr, fmt, ymd } from "../lib/dates";
-import useRequireNightAudit from "../hooks/useRequireNightAudit";
+ import React, { useCallback, useEffect, useMemo, useState } from "react";
+ import { Link, useNavigate } from "react-router-dom";
+ import { collection, getDocs, query, where, onSnapshot } from "firebase/firestore";
+ import { db } from "../firebase";
+ import { startOfDayStr, endOfDayStr, todayStr, fmt, ymd } from "../lib/dates";
+ import useRequireNightAudit from "../hooks/useRequireNightAudit";
 
 export default function FrontDeskCheckIn({ permissions = [] }) {
   const navigate = useNavigate();
-  const can = (p) => permissions.includes(p) || permissions.includes("*");
+  const can = useCallback(
+    (perm) => permissions.includes(perm) || permissions.includes("*"),
+    [permissions]
+  );
 
-  // 🔹 ALL HOOKS AT THE TOP
+  // --- State ---
   const [date, setDate] = useState(todayStr());
   const [search, setSearch] = useState("");
   const [arrivals, setArrivals] = useState([]);
   const [rooms, setRooms] = useState([]);
+ const [loading, setLoading] = useState(true);
+ const [error, setError] = useState(null);
+
   const { ready } = useRequireNightAudit(7);
 
-  // 🔹 Load arrivals from Firestore
-  async function loadArrivals(selectedDate) {
+  // --- Helper: debounce search ---
+ const [debouncedSearch, setDebouncedSearch] = useState("");
+ useEffect(() => {
+   const handler = setTimeout(() => setDebouncedSearch(search.trim().toLowerCase()), 400);
+   return () => clearTimeout(handler);
+ }, [search]);
+
+  // --- Fetch arrivals (async) ---
+  const loadArrivals = useCallback(async (selectedDate) => {
     const start = startOfDayStr(selectedDate);
     const end = endOfDayStr(selectedDate);
     const results = [];
@@ -34,6 +47,7 @@ export default function FrontDeskCheckIn({ permissions = [] }) {
       snapTs.forEach((d) => results.push({ id: d.id, ...d.data() }));
     } catch (err) {
       console.error("Error loading timestamp arrivals:", err);
+      setError("Failed to load timestamp-based reservations.");
     }
 
     try {
@@ -46,147 +60,161 @@ export default function FrontDeskCheckIn({ permissions = [] }) {
       snapStr.forEach((d) => results.push({ id: d.id, ...d.data() }));
     } catch (err) {
       console.error("Error loading string-date arrivals:", err);
+      setError("Failed to load string-date reservations.");
     }
 
-    // de-dup and remove deleted
     const seen = new Set();
     return results.filter((r) => {
       if (seen.has(r.id)) return false;
       seen.add(r.id);
       return (r.status || "").toLowerCase() !== "deleted";
     });
-  }
+  }, []);
 
-  // 🔹 Load and filter arrivals
-  const load = async () => {
-    const items = await loadArrivals(date);
-
-    const s = search.trim().toLowerCase();
-    const filtered = s
-      ? items.filter(
-          (r) =>
-            (r.guestName || "").toLowerCase().includes(s) ||
-            (r.resNo || r.id).toLowerCase().includes(s) ||
-            (Array.isArray(r.roomNumbers)
-              ? r.roomNumbers.join(",")
-              : r.roomNumber || ""
-            ).toLowerCase().includes(s)
-        )
-      : items;
-
-    setArrivals(filtered);
-
+  // --- Load and filter ---
+  const load = useCallback(async () => {
+   setLoading(true);
     try {
+      const items = await loadArrivals(date);
+
+      const filtered = debouncedSearch
+        ? items.filter((r) =>
+            [r.guestName, r.resNo, r.id, ...(Array.isArray(r.roomNumbers) ? r.roomNumbers : [r.roomNumber])]
+              .join(" ")
+              .toLowerCase()
+              .includes(debouncedSearch)
+          )
+        : items;
+
+      setArrivals(filtered);
+
+      // load room statuses
       const rSnap = await getDocs(collection(db, "rooms"));
-      setRooms(rSnap.docs.map((d) => d.data()));
+      setRooms(rSnap.docs.map((d) => d.data() || {}));
     } catch (err) {
-      console.error("Error loading rooms:", err);
+      console.error("Error loading arrivals:", err);
+      setError("Failed to load arrivals.");
+    } finally {
+      setLoading(false);
     }
-  };
+  }, [date, debouncedSearch, loadArrivals]);
 
-  // 🔹 useEffect always declared
+  // --- Auto load when date or search changes ---
   useEffect(() => {
-    if (!ready) return; // only run load when ready
-    load();
-  }, [date, search, ready]);
+    if (ready) load();
+  }, [ready, load]);
 
-  // 🔹 Room status badge
-  const roomBadge = (roomNumber) => {
-    const rm = rooms.find((x) => x.roomNumber === roomNumber);
-    const st = rm?.status || "";
-    const tag =
-      st === "Occupied"
-        ? "OCC"
-        : st === "Vacant Dirty"
-        ? "VD"
-        : st === "Vacant Clean"
-        ? "VC"
-        : st === "OOO"
-        ? "OOO"
-        : "";
-    return `${roomNumber}${tag ? ` (${tag})` : ""}`;
-  };
+  // --- Room badge ---
+  const roomBadge = useCallback(
+    (roomNumber) => {
+      const rm = rooms.find((x) => x.roomNumber === roomNumber);
+      const st = rm?.status || "";
+      const tag =
+        st === "Occupied"
+          ? "OCC"
+          : st === "Vacant Dirty"
+          ? "VD"
+          : st === "Vacant Clean"
+          ? "VC"
+          : st === "OOO"
+          ? "OOO"
+          : "";
+      return `${roomNumber}${tag ? ` (${tag})` : ""}`;
+    },
+    [rooms]
+  );
 
-  // 🔹 Early return for Night Audit (UI only)
+  // --- Derived states ---
+  const hasArrivals = arrivals.length > 0;
+
+  // --- Early Night Audit check ---
   if (!ready) {
     return (
-      <div>
-        <h3>Night Audit required</h3>
+      <div className="notice-box">
+        <h3>Night Audit Required</h3>
         <p>
-          Night Audit for the business day has not been completed. Please run
-          Night Audit before performing check-in operations.
+          The Night Audit for this business day has not been completed.
+          Please complete Night Audit before performing check-in operations.
         </p>
-        <button onClick={() => navigate("/night-audit")}>Run Night Audit</button>
+        <button className="btn-primary" onClick={() => navigate("/night-audit")}>
+          Run Night Audit
+        </button>
       </div>
     );
   }
 
+  // --- UI ---
   return (
     <div className="reservations-container">
-      <h2>Check In</h2>
+      <h2 style={{ marginBottom: 8 }}>Front Desk Check-In</h2>
 
-      <div className="reservation-form" style={{ marginBottom: 12 }}>
+      {/* Search Form */}
+      <div className="reservation-form" style={{ marginBottom: 16 }}>
         <label>Date</label>
         <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
-        <div className="form-actions">
-          <button className="btn-primary" onClick={() => setDate(todayStr())}>Today</button>
-          <button
-            onClick={() => {
-              const t = new Date();
-              t.setDate(t.getDate() + 1);
-              setDate(ymd(t));
-            }}
-          >
+        <div className="form-actions" style={{ marginBottom: 8 }}>
+          <button className="btn btn-primary" onClick={() => setDate(todayStr())}>Today</button>
+          <button className="btn" onClick={() => setDate(ymd(new Date(Date.now() + 86400000)))}>
             Tomorrow
           </button>
         </div>
 
         <label>Search</label>
         <input
-          placeholder="Guest / Res No / Room"
+          placeholder="Search Guest / Res No / Room"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
       </div>
 
-      <table className="reservations-table">
-        <thead>
-          <tr>
-            <th>Res No</th>
-            <th>Guest</th>
-            <th>Rooms</th>
-            <th>Check-In</th>
-            <th>Check-Out</th>
-            <th>Adults</th>
-            <th>Children</th>
-            <th>Action</th>
-          </tr>
-        </thead>
-        <tbody>
-          {arrivals.map((r) => (
-            <tr key={r.id}>
-              <td>{r.resNo || r.id}</td>
-              <td>{r.guestName}</td>
-              <td>
-                {(Array.isArray(r.roomNumbers) ? r.roomNumbers : [r.roomNumber])
-                  .filter(Boolean)
-                  .map((n) => <span key={n}>{roomBadge(n)} </span>)}
-              </td>
-              <td>{fmt(r.checkInDate)}</td>
-              <td>{fmt(r.checkOutDate)}</td>
-              <td>{r.adults ?? "-"}</td>
-              <td>{r.children ?? "-"}</td>
-              <td>
-                {can("canViewReservations") && (
-                  <Link className="btn-primary" to={`/reservations/${r.id}`}>
-                    See details
-                  </Link>
-                )}
-              </td>
+      {/* Loading / Error / Empty States */}
+      {loading && <div className="muted">Loading arrivals...</div>}
+      {error && <div className="error">{error}</div>}
+      {!loading && !hasArrivals && <div className="muted">No arrivals for this date.</div>}
+
+      {/* Arrivals Table */}
+      {hasArrivals && (
+        <table className="reservations-table" style={{ marginTop: 8 }}>
+          <thead>
+            <tr>
+              <th>Res No</th>
+              <th>Guest</th>
+              <th>Rooms</th>
+              <th>Check-In</th>
+              <th>Check-Out</th>
+              <th>Adults</th>
+              <th>Children</th>
+              <th>Action</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {arrivals.map((r) => (
+              <tr key={r.id}>
+                <td>{r.resNo || r.id}</td>
+                <td>{r.guestName || "-"}</td>
+                <td>
+                  {(Array.isArray(r.roomNumbers) ? r.roomNumbers : [r.roomNumber])
+                    .filter(Boolean)
+                    .map((n) => (
+                      <span key={n}>{roomBadge(n)} </span>
+                    ))}
+                </td>
+                <td>{fmt(r.checkInDate)}</td>
+                <td>{fmt(r.checkOutDate)}</td>
+                <td>{r.adults ?? "-"}</td>
+                <td>{r.children ?? "-"}</td>
+                <td>
+                  {can("canViewReservations") && (
+                    <Link className="btn btn-primary" to={`/reservations/${r.id}`}>
+                      See Details
+                    </Link>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   );
 }
