@@ -4,14 +4,14 @@ import { doc, getDoc, setDoc } from "firebase/firestore";
 import { db } from "../firebase";
 import "../styles/ReservationDetail.css";
 
-export default function AdminPrintTemplate({ permissions = [] }) {
+export default function AdminPrintTemplate() {
   const [activeTab, setActiveTab] = useState("checkIn");
-  const [current, setCurrent] = useState({
+  const [checkInTemplate, setCheckInTemplate] = useState({
     header: "MILLENNIUM INN",
     body: "<p>Welcome {{guestName}} to Millennium Inn.<br/>Room: {{roomNumber}}</p>",
     footer: "<p>Signature: __________________</p>"
   });
-  const [checkOut, setCheckOut] = useState({
+  const [checkOutTemplate, setCheckOutTemplate] = useState({
     header: "MILLENNIUM INN",
     body: "<p>Thank you {{guestName}} for staying with us.<br/>Balance: {{balance}}</p>",
     footer: "<p>Signature: __________________</p>"
@@ -21,41 +21,40 @@ export default function AdminPrintTemplate({ permissions = [] }) {
   useEffect(() => {
     async function load() {
       try {
-        const tdoc = await getDoc(doc(db, "admin_print_templates", "default"));
-        if (tdoc.exists()) {
-          const data = tdoc.data();
-          if (data.checkInTemplate) setCurrent(data.checkInTemplate);
-          if (data.checkOutTemplate) setCheckOut(data.checkOutTemplate);
+        const snap = await getDoc(doc(db, "admin_print_templates", "default"));
+        if (snap.exists()) {
+          const data = snap.data();
+          if (data.checkInTemplate) setCheckInTemplate(data.checkInTemplate);
+          if (data.checkOutTemplate) setCheckOutTemplate(data.checkOutTemplate);
         }
       } catch (err) {
-        console.warn("Failed to load templates", err);
+        console.warn("load templates", err);
       }
     }
     load();
   }, []);
 
-  const saveTemplates = async () => {
+  const save = async () => {
     setSaving(true);
     try {
       await setDoc(doc(db, "admin_print_templates", "default"), {
-        checkInTemplate: current,
-        checkOutTemplate: checkOut
+        checkInTemplate,
+        checkOutTemplate
       }, { merge: true });
-      alert("Templates saved");
+      alert("Saved templates");
     } catch (err) {
-      console.error(err);
+      console.error("save templates", err);
       alert("Failed to save");
     } finally {
       setSaving(false);
     }
   };
 
-  const handleChange = (tab, key, val) => {
-    if (tab === "checkIn") setCurrent({ ...current, [key]: val });
-    else setCheckOut({ ...checkOut, [key]: val });
+  const tpl = activeTab === "checkIn" ? checkInTemplate : checkOutTemplate;
+  const setTpl = (k, v) => {
+    if (activeTab === "checkIn") setCheckInTemplate({ ...checkInTemplate, [k]: v });
+    else setCheckOutTemplate({ ...checkOutTemplate, [k]: v });
   };
-
-  const tpl = activeTab === "checkIn" ? current : checkOut;
 
   return (
     <div className="reservation-detail-container card">
@@ -70,15 +69,13 @@ export default function AdminPrintTemplate({ permissions = [] }) {
       <div style={{ display: "flex", gap: 12, marginTop: 12 }}>
         <div style={{ flex: 1 }}>
           <label>Header</label>
-          <input value={tpl.header} onChange={(e) => handleChange(activeTab, "header", e.target.value)} />
+          <input value={tpl.header} onChange={e => setTpl("header", e.target.value)} />
           <label style={{ marginTop: 8 }}>Body (HTML allowed)</label>
-          <textarea rows={10} value={tpl.body} onChange={(e) => handleChange(activeTab, "body", e.target.value)} />
+          <textarea rows={10} value={tpl.body} onChange={e => setTpl("body", e.target.value)} />
           <label style={{ marginTop: 8 }}>Footer</label>
-          <input value={tpl.footer} onChange={(e) => handleChange(activeTab, "footer", e.target.value)} />
+          <input value={tpl.footer} onChange={e => setTpl("footer", e.target.value)} />
           <div style={{ marginTop: 12 }}>
-            <button className="btn btn-primary" onClick={saveTemplates} disabled={saving}>
-              {saving ? "Saving…" : "💾 Save Templates"}
-            </button>
+            <button className="btn btn-primary" onClick={save} disabled={saving}>{saving ? "Saving…" : "💾 Save Templates"}</button>
           </div>
         </div>
 
@@ -98,12 +95,11 @@ export default function AdminPrintTemplate({ permissions = [] }) {
           <div style={{ marginTop: 12 }}>
             <h5>Placeholders</h5>
             <ul>
-<li><code>{"{{guestName}}"}</code></li>
-<li><code>{"{{roomNumber}}"}</code></li>
-<li><code>{"{{checkInDate}}"}</code> / <code>{"{{checkOutDate}}"}</code></li>
-<li><code>{"{{balance}}"}</code></li>
-<li><code>{"{{staffName}}"}</code></li>
-
+              <li><code>{"{{guestName}}"}</code></li>
+              <li><code>{"{{roomNumber}}"}</code></li>
+              <li><code>{"{{checkInDate}}"}</code> / <code>{"{{checkOutDate}}"}</code></li>
+              <li><code>{"{{balance}}"}</code></li>
+              <li><code>{"{{staffName}}"}</code></li>
             </ul>
           </div>
         </div>
