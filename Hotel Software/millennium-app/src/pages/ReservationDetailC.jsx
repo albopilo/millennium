@@ -51,6 +51,31 @@ const [templates, setTemplates] = useState({
   // indicate that we've applied templates into state and ready to render/print
   const [templatesLoaded, setTemplatesLoaded] = useState(false);
 
+  // --- staff info (auth + Firestore profile) ---
+  const [staffProfile, setStaffProfile] = useState({ displayName: "Front Desk", email: "-" });
+
+  useEffect(() => {
+    async function loadStaffProfile() {
+      try {
+        const authUser = window.currentUser || JSON.parse(localStorage.getItem("authUser") || "{}");
+        if (authUser?.uid) {
+          const userSnap = await getDoc(doc(db, "users", authUser.uid));
+          if (userSnap.exists()) {
+            const data = userSnap.data();
+            setStaffProfile({
+              displayName: data.displayName || authUser.displayName || "Front Desk",
+              email: authUser.email || "-"
+            });
+            return;
+          }
+        }
+      } catch (e) {
+        console.warn("Failed to load staff profile", e);
+      }
+    }
+    loadStaffProfile();
+  }, []);
+
   // load admin print template (admin_print_templates/default)
   useEffect(() => {
     let mounted = true;
@@ -130,8 +155,8 @@ const [templates, setTemplates] = useState({
     // --- map guest and staff info ---
     const guestPhone = guest?.phoneNumber || guest?.phone || "-";
     const guestEmail = guest?.email || "-";
-    const displayName = window.currentUser?.displayName || "Front Desk";
-    const staffEmail = window.currentUser?.email || "-";
+    const displayName = staffProfile.displayName || "Front Desk";
+    const staffEmail = staffProfile.email || "-";
 
     // --- build table rows for room charges and payments ---
     const roomCharges = (displayChargeLines || [])
