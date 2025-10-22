@@ -2,26 +2,14 @@
 import React, { useMemo } from "react";
 import "../styles/ReservationDetail.css";
 
-/**
- * ReservationDetailC
- * ------------------
- * Pure presentation layer for folio and payments section.
- * Uses modals and handlers from parent ReservationDetailA.
- * - All monetary inputs are instant (no debounce)
- * - Unified modal structure (same markup as ReservationDetailA)
- * - Displays charges, payments, and room subtotals
- * - Supports linked print actions (AdminPrintTemplate)
- */
-
 export default function ReservationDetailC({
   reservation,
-  guest,
-  postings = [],
-  payments = [],
+  displayChargeLines = [],
+  displayChargesTotal = 0,
+  displayPaymentsTotal = 0,
+  displayBalance = 0,
   currency = "IDR",
-  fmtMoney = (n) =>
-    isNaN(n) ? "-" : Number(n).toLocaleString("id-ID", { minimumFractionDigits: 0 }),
-  // Modal controls passed from parent
+  fmtMoney = (n) => (isNaN(n) ? "-" : Number(n).toLocaleString("id-ID")),
   showAddCharge,
   setShowAddCharge,
   chargeForm,
@@ -32,184 +20,226 @@ export default function ReservationDetailC({
   paymentForm,
   setPaymentForm,
   submitPayment,
-  canOperate = false,
-  printCheckInForm,
-  printCheckOutBill,
+  canOperate,
+  fmt = (d) => (d ? new Date(d).toLocaleString() : "-"),
+  postings = [],
+  payments = [],
+  guest,
+  logReservationChange = () => {},
 }) {
-  // === Derived Values ===
-  const visiblePostings = useMemo(
-    () => postings.filter((p) => ((p.status || "") + "").toLowerCase() !== "void"),
-    [postings]
-  );
-
-  const chargesTotal = visiblePostings.reduce((sum, p) => sum + Number(p.amount || 0), 0);
-  const paymentsTotal = payments.reduce((sum, p) => sum + Number(p.amount || 0), 0);
-  const balance = chargesTotal - paymentsTotal;
-
-  // === Room Subtotals (optional) ===
-  const roomSubtotals = useMemo(() => {
+  // === Room-based subtotal aggregation ===
+  const roomLines = useMemo(() => {
+    const roomPostings = (postings || []).filter(
+      (p) =>
+        ((p.accountCode || "") + "").toUpperCase() === "ROOM" &&
+        ((p.status || "") + "").toLowerCase() !== "void"
+    );
     const map = {};
-    for (const p of visiblePostings) {
-      const room = p.roomNumber || "—";
-      map[room] = (map[room] || 0) + Number(p.amount || 0);
+    for (const p of roomPostings) {
+      const rn = p.roomNumber || "—";
+      map[rn] = (map[rn] || 0) + Number(p.amount || 0);
     }
-    return Object.entries(map).map(([room, subtotal]) => ({ room, subtotal }));
-  }, [visiblePostings]);
+    return Object.keys(map).map((k) => ({ roomNo: k, subtotal: map[k] }));
+  }, [postings]);
 
-  // === UI ===
+  // === Handlers ===
+  const onSubmitCharge = async () => {
+    try {
+      await submitCharge();
+      logReservationChange("add_charge", { ...chargeForm });
+    } catch (err) {
+      console.error("Charge failed:", err);
+    }
+  };
+
+  const onSubmitPayment = async () => {
+    try {
+      await submitPayment();
+      logReservationChange("add_payment", { ...paymentForm });
+    } catch (err) {
+      console.error("Payment failed:", err);
+    }
+  };
+
   return (
-    <div className="card panel">
-      {/* Header */}
-      <div className="panel-header">
-        <h3>Folio & Payments</h3>
-        <div style={{ textAlign: "right" }}>
-          <div className="muted">
-            Charges: {currency} {fmtMoney(chargesTotal)}
-          </div>
-          <div className="muted">
-            Payments: {currency} {fmtMoney(paymentsTotal)}
-          </div>
-          <div style={{ fontWeight: 700 }}>
-            Balance: {currency} {fmtMoney(balance)}
+    <div className="reservation-detail-container">
+      {/* === Folio Summary === */}
+      <div className="card">
+        <div className="card-header">
+          <h3>Folio & Payments</h3>
+        </div>
+
+        <div className="card-body">
+          <div className="summary-bar">
+            <div className="summary-item">
+              <div className="summary-label">Charges</div>
+              <div className="summary-value text-blue">
+                {currency} {fmtMoney(displayChargesTotal)}
+              </div>
+            </div>
+            <div className="summary-item">
+              <div className="summary-label">Payments</div>
+              <div className="summary-value text-green">
+                {currency} {fmtMoney(displayPaymentsTotal)}
+              </div>
+            </div>
+            <div className="summary-item">
+              <div className="summary-label">Balance</div>
+              <div
+                className={`summary-value ${
+                  displayBalance > 0 ? "text-red" : "text-green"
+                }`}
+              >
+                {currency} {fmtMoney(displayBalance)}
+              </div>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Folio Body */}
-      <div className="panel-body space-y-4">
-        {/* === Room Subtotals === */}
-        {roomSubtotals.length > 0 && (
-          <div className="subsection">
-            <h4>Room Summary</h4>
-            {roomSubtotals.map((r) => (
-              <div key={r.room} className="line-row">
-                <div>Room {r.room}</div>
-                <div>{currency} {fmtMoney(r.subtotal)}</div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* === Charges === */}
-        <div className="subsection">
-          <h4>Charges</h4>
-          {visiblePostings.length === 0 ? (
-            <div className="muted">No charges recorded.</div>
-          ) : (
-            visiblePostings.map((p) => (
-              <div key={p.id || p.description} className="line-row">
-                <div>{p.description || p.accountCode}</div>
-                <div>{currency} {fmtMoney(p.amount)}</div>
-              </div>
-            ))
-          )}
+      {/* === Room Charges === */}
+      <div className="card">
+        <div className="card-header">
+          <h4>Room Charges</h4>
         </div>
-
-        {/* === Payments === */}
-        <div className="subsection">
-          <h4>Payments</h4>
-          {payments.length === 0 ? (
-            <div className="muted">No payments recorded.</div>
+        <div className="card-body">
+          {roomLines.length === 0 ? (
+            <div className="empty-state">No room postings.</div>
           ) : (
-            payments.map((p) => (
-              <div key={p.id || p.refNo} className="line-row">
-                <div>
-                  {new Date(
-                    p.capturedAt?.seconds
-                      ? p.capturedAt.seconds * 1000
-                      : p.capturedAt || Date.now()
-                  ).toLocaleString()}
-                  <br />
-                  <span className="muted">({p.method?.toUpperCase()})</span>
+            <div className="invoice-list">
+              {roomLines.map((r) => (
+                <div key={r.roomNo} className="invoice-line">
+                  <div>Room {r.roomNo}</div>
+                  <div className="text-end">
+                    {currency} {fmtMoney(r.subtotal)}
+                  </div>
                 </div>
-                <div>{currency} {fmtMoney(p.amount)}</div>
-              </div>
-            ))
+              ))}
+            </div>
           )}
         </div>
-
-        {/* === Actions === */}
-        {canOperate && (
-          <div className="action-bar flex-wrap">
-            <button className="btn btn-primary" onClick={() => setShowAddCharge(true)}>
-              + Add Charge
-            </button>
-            <button className="btn btn-primary" onClick={() => setShowAddPayment(true)}>
-              + Add Payment
-            </button>
-
-            {/* Print Actions */}
-            {reservation?.status?.toLowerCase() === "booked" && (
-              <button className="btn btn-secondary" onClick={printCheckInForm}>
-                🖨 Print Check-In Form
-              </button>
-            )}
-            {reservation?.status?.toLowerCase() === "checked-out" && (
-              <button className="btn btn-secondary" onClick={printCheckOutBill}>
-                🧾 Print Check-Out Bill
-              </button>
-            )}
-          </div>
-        )}
       </div>
+
+      {/* === Other Charges === */}
+      <div className="card">
+        <div className="card-header">
+          <h4>Other Charges</h4>
+        </div>
+        <div className="card-body">
+          {displayChargeLines.length === 0 ? (
+            <div className="empty-state">No additional charges.</div>
+          ) : (
+            <div className="invoice-list">
+              {displayChargeLines.map((p) => (
+                <div key={p.id || p.description} className="invoice-line">
+                  <div>{p.description || p.accountCode}</div>
+                  <div className="text-end">
+                    {currency} {fmtMoney(p.amount)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* === Payments === */}
+      <div className="card">
+        <div className="card-header">
+          <h4>Payments</h4>
+        </div>
+        <div className="card-body">
+          {payments.length === 0 ? (
+            <div className="empty-state">No recorded payments.</div>
+          ) : (
+            <div className="invoice-list">
+              {payments.map((p, i) => (
+                <div key={i} className="invoice-line">
+                  <div>
+                    {fmt(p.date)} <br />
+                    <small>{p.method?.toUpperCase()}</small>
+                  </div>
+                  <div className="text-end">
+                    {currency} {fmtMoney(p.amount)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* === Add Buttons === */}
+      {canOperate && (
+        <div className="btn-group">
+          <button
+            className="btn btn-primary"
+            onClick={() => setShowAddCharge(true)}
+          >
+            + Add Charge
+          </button>
+          <button
+            className="btn btn-primary"
+            onClick={() => setShowAddPayment(true)}
+          >
+            + Add Payment
+          </button>
+        </div>
+      )}
 
       {/* === Add Charge Modal === */}
       {showAddCharge && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-          <div className="bg-white p-6 rounded-xl shadow-md w-96">
-            <h3 className="text-lg font-semibold mb-4">Add Charge</h3>
-            <label className="block text-sm mb-1">Description</label>
-            <input
-              className="border rounded-md w-full mb-3 p-2"
-              placeholder="e.g., Room Service"
-              value={chargeForm.description}
-              onChange={(e) =>
-                setChargeForm({ ...chargeForm, description: e.target.value })
-              }
-            />
-
-            <div className="flex gap-3 mb-3">
+        <div className="modal-overlay">
+          <div className="modal-card">
+            <h3>Add Charge</h3>
+            <div className="modal-body">
               <input
-                className="border rounded-md w-1/3 p-2"
-                placeholder="Qty"
-                value={chargeForm.qtyStr}
+                placeholder="Description"
+                value={chargeForm.description}
                 onChange={(e) =>
-                  setChargeForm({ ...chargeForm, qtyStr: e.target.value })
+                  setChargeForm({ ...chargeForm, description: e.target.value })
                 }
               />
-              <input
-                className="border rounded-md w-1/3 p-2"
-                placeholder="Unit"
-                value={chargeForm.unitStr}
-                onChange={(e) =>
-                  setChargeForm({ ...chargeForm, unitStr: e.target.value })
-                }
-              />
-              <select
-                className="border rounded-md w-1/3 p-2"
-                value={chargeForm.accountCode}
-                onChange={(e) =>
-                  setChargeForm({ ...chargeForm, accountCode: e.target.value })
-                }
-              >
-                <option value="MISC">MISC</option>
-                <option value="ROOM">ROOM</option>
-                <option value="DEPOSIT">DEPOSIT</option>
-                <option value="UPGRADE">UPGRADE</option>
-              </select>
+              <div className="modal-row">
+                <input
+                  placeholder="Qty"
+                  value={chargeForm.qtyStr}
+                  onChange={(e) =>
+                    setChargeForm({ ...chargeForm, qtyStr: e.target.value })
+                  }
+                />
+                <input
+                  placeholder="Unit"
+                  value={chargeForm.unitStr}
+                  onChange={(e) =>
+                    setChargeForm({ ...chargeForm, unitStr: e.target.value })
+                  }
+                />
+                <select
+                  value={chargeForm.accountCode}
+                  onChange={(e) =>
+                    setChargeForm({
+                      ...chargeForm,
+                      accountCode: e.target.value,
+                    })
+                  }
+                >
+                  <option value="MISC">MISC</option>
+                  <option value="ROOM">ROOM</option>
+                  <option value="DEPOSIT">DEPOSIT</option>
+                  <option value="ADJ">ADJ</option>
+                </select>
+              </div>
             </div>
 
-            <div className="flex justify-end gap-3">
+            <div className="modal-footer">
               <button
-                className="px-4 py-2 bg-gray-200 rounded-md"
+                className="btn btn-secondary"
                 onClick={() => setShowAddCharge(false)}
               >
                 Cancel
               </button>
-              <button
-                className="px-4 py-2 bg-blue-600 text-white rounded-md"
-                onClick={submitCharge}
-              >
+              <button className="btn btn-primary" onClick={onSubmitCharge}>
                 Add
               </button>
             </div>
@@ -219,57 +249,49 @@ export default function ReservationDetailC({
 
       {/* === Add Payment Modal === */}
       {showAddPayment && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-          <div className="bg-white p-6 rounded-xl shadow-md w-96">
-            <h3 className="text-lg font-semibold mb-4">Add Payment</h3>
+        <div className="modal-overlay">
+          <div className="modal-card">
+            <h3>Add Payment</h3>
+            <div className="modal-body">
+              <input
+                placeholder="Amount"
+                value={paymentForm.amountStr}
+                onChange={(e) =>
+                  setPaymentForm({
+                    ...paymentForm,
+                    amountStr: e.target.value,
+                  })
+                }
+              />
+              <input
+                placeholder="Reference / Notes"
+                value={paymentForm.refNo}
+                onChange={(e) =>
+                  setPaymentForm({ ...paymentForm, refNo: e.target.value })
+                }
+              />
+              <select
+                value={paymentForm.method}
+                onChange={(e) =>
+                  setPaymentForm({ ...paymentForm, method: e.target.value })
+                }
+              >
+                <option value="cash">Cash</option>
+                <option value="card">Card</option>
+                <option value="bank">Bank Transfer</option>
+                <option value="qris">QRIS</option>
+                <option value="ota">OTA</option>
+              </select>
+            </div>
 
-            <label className="block text-sm mb-1">Amount</label>
-            <input
-              type="text"
-              className="border rounded-md w-full mb-3 p-2"
-              placeholder="100000"
-              value={paymentForm.amountStr}
-              onChange={(e) =>
-                setPaymentForm({ ...paymentForm, amountStr: e.target.value })
-              }
-            />
-
-            <label className="block text-sm mb-1">Reference / Note</label>
-            <input
-              className="border rounded-md w-full mb-3 p-2"
-              placeholder="Ref number or note"
-              value={paymentForm.refNo}
-              onChange={(e) =>
-                setPaymentForm({ ...paymentForm, refNo: e.target.value })
-              }
-            />
-
-            <label className="block text-sm mb-1">Payment Method</label>
-            <select
-              className="border rounded-md w-full mb-4 p-2"
-              value={paymentForm.method}
-              onChange={(e) =>
-                setPaymentForm({ ...paymentForm, method: e.target.value })
-              }
-            >
-              <option value="cash">Cash</option>
-              <option value="card">Card</option>
-              <option value="transfer">Bank Transfer</option>
-              <option value="qris">QRIS</option>
-              <option value="ota">OTA</option>
-            </select>
-
-            <div className="flex justify-end gap-3">
+            <div className="modal-footer">
               <button
-                className="px-4 py-2 bg-gray-200 rounded-md"
+                className="btn btn-secondary"
                 onClick={() => setShowAddPayment(false)}
               >
                 Cancel
               </button>
-              <button
-                className="px-4 py-2 bg-green-600 text-white rounded-md"
-                onClick={submitPayment}
-              >
+              <button className="btn btn-primary" onClick={onSubmitPayment}>
                 Add
               </button>
             </div>
