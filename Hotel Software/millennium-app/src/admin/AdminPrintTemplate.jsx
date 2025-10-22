@@ -258,22 +258,37 @@ export default function AdminPrintTemplate() {
   }
 
   // sample data used for preview replacement
-  const sampleData = useMemo(() => ({
+const sampleData = useMemo(() => ({
     guestName: "Sample Guest",
-    roomNumber: "107 - Standard",
-    checkInDate: new Date().toLocaleString(),
-    checkOutDate: new Date(Date.now() + 24 * 60 * 60 * 1000).toLocaleString(),
+    roomNumber: "107 - Standard Room",
+    checkInDate: "20/02/2025",
+    checkInTime: "20/02/2025 17:53",
+    checkOutDate: "21/02/2025",
+    checkOutTime: "21/02/2025 12:00",
+    staffName: "Edo",
+    staffEmail: "edo@millenniuminn.com",
+    totalCharge: "IDR 300.000",
+    totalPayment: "IDR 150.000",
     balance: "IDR 150.000",
-    staffName: "Edo"
+    paymentMethod: "Credit Card",
+    roomCharges: `
+      <tr><td style="text-align:center;">1</td><td>Room 107 — Standard Room</td><td style="text-align:right;">150,000</td><td style="text-align:center;">1</td><td style="text-align:right;">150,000</td></tr>
+      <tr><td style="text-align:center;">2</td><td>Breakfast Add-on</td><td style="text-align:right;">50,000</td><td style="text-align:center;">1</td><td style="text-align:right;">50,000</td></tr>
+    `,
+    payments: `
+      <tr><td>Credit Card</td><td>VISA #1234</td><td style="text-align:right;">150,000</td></tr>
+    `
   }), []);
 
   function renderWithPlaceholders(html) {
     if (!html) return "";
     let out = String(html);
     // minimal replacement
-    Object.entries(sampleData).forEach(([k, v]) => {
-      out = out.split(`{{${k}}}`).join(String(v));
+Object.entries(sampleData).forEach(([k, v]) => {
+      out = out.split(`{{\${k}}}`).join(String(v));
     });
+    // optional clean-up for unused placeholders
+    out = out.replace(/{{\s*\w+\s*}}/g, "—");
     return out;
   }
 
