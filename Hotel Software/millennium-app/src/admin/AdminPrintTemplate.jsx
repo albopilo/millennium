@@ -98,11 +98,12 @@ export default function AdminPrintTemplate({ permissions = [] }) {
           <div style={{ marginTop: 12 }}>
             <h5>Placeholders</h5>
             <ul>
-              <li><code>{{guestName}}</code></li>
-              <li><code>{{roomNumber}}</code></li>
-              <li><code>{{checkInDate}}</code> / <code>{{checkOutDate}}</code></li>
-              <li><code>{{balance}}</code></li>
-              <li><code>{{staffName}}</code></li>
+<li><code>{"{{guestName}}"}</code></li>
+<li><code>{"{{roomNumber}}"}</code></li>
+<li><code>{"{{checkInDate}}"}</code> / <code>{"{{checkOutDate}}"}</code></li>
+<li><code>{"{{balance}}"}</code></li>
+<li><code>{"{{staffName}}"}</code></li>
+
             </ul>
           </div>
         </div>
