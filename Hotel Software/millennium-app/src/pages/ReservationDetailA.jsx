@@ -597,7 +597,46 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
   const displayBalance = displayChargesTotal - displayPaymentsTotal;
 
   // small fmt helper (used by children)
-  const fmt = (d) => (d ? new Date(d).toLocaleString() : "-");
+  // small fmt helper (used by children)
+// robustly handles Firestore Timestamps, plain Date, number (ms), and ISO strings
+const fmt = (raw) => {
+  if (!raw && raw !== 0) return "-";
+  let dateObj = null;
+
+  try {
+    // Firestore Timestamp object has .toDate()
+    if (raw && typeof raw.toDate === "function") {
+      dateObj = raw.toDate();
+    }
+    // Some code stores plain seconds / seconds+nanos object
+    else if (raw && typeof raw.seconds === "number") {
+      dateObj = new Date(Number(raw.seconds) * 1000);
+    }
+    // If it's already a Date instance
+    else if (raw instanceof Date) {
+      dateObj = raw;
+    }
+    // If it's a numeric epoch in ms
+    else if (typeof raw === "number") {
+      dateObj = new Date(raw);
+    }
+    // If it's a string, try parse it
+    else if (typeof raw === "string") {
+      const maybe = new Date(raw);
+      dateObj = isNaN(maybe) ? null : maybe;
+    } else {
+      // fallback try
+      const maybe = new Date(raw);
+      dateObj = isNaN(maybe) ? null : maybe;
+    }
+  } catch (err) {
+    dateObj = null;
+  }
+
+  if (!dateObj || isNaN(dateObj.getTime())) return "-";
+  return dateObj.toLocaleString();
+};
+
 
   if (loading || !reservation) {
     return <div style={{ padding: 20 }}>Loading reservation…</div>;
