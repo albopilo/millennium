@@ -64,7 +64,9 @@ export default function ReservationDetailC({
       "{{staffName}}": "Frontdesk"
     };
     let body = tpl.body || "";
-    Object.entries(placeholders).forEach(([k, v]) => { body = body.split(k).join(v); });
+    Object.entries(placeholders).forEach(([key, val]) => {
+  body = body.split(key).join(val);
+});
     const header = tpl.header || "";
     const footer = tpl.footer || "";
     return `<div style="font-family: Arial, sans-serif; color: #111;">
