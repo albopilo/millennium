@@ -118,29 +118,85 @@ const [templates, setTemplates] = useState({
     const tpl = mode === "checkin" ? templates.checkInTemplate : (mode === "checkout" ? templates.checkOutTemplate : { header: "", body: "", footer: "" });
     if (!tpl || typeof tpl.body !== "string") return "";
 
+// --- derive timing placeholders ---
+    const checkInTime = reservation?.checkedInAt
+      ? fmt(reservation.checkedInAt)
+      : fmt(reservation?.checkInDate);
+    const checkOutTime =
+      reservation?.checkedOutAt
+        ? fmt(reservation.checkedOutAt)
+        : `${fmt(reservation?.checkOutDate)} (12:00 PM est.)`;
+
+    // --- map guest and staff info ---
+    const guestPhone = guest?.phoneNumber || guest?.phone || "-";
+    const guestEmail = guest?.email || "-";
+    const displayName = window.currentUser?.displayName || "Front Desk";
+    const staffEmail = window.currentUser?.email || "-";
+
+    // --- build table rows for room charges and payments ---
+    const roomCharges = (displayChargeLines || [])
+      .map(
+        (c, i) =>
+          `<tr>
+            <td style="text-align:center;">${i + 1}</td>
+            <td>${c.description || ""}</td>
+            <td style="text-align:right;">${fmtIdr(c.amount)}</td>
+            <td style="text-align:center;">1</td>
+            <td style="text-align:right;">${fmtIdr(c.amount)}</td>
+          </tr>`
+      )
+      .join("");
+
+    const paymentRows = (payments || [])
+      .filter((p) => ((p.status || "") + "").toLowerCase() !== "void")
+      .map(
+        (p) =>
+          `<tr>
+            <td>${p.method || "-"}</td>
+            <td>${p.refNo || "-"}</td>
+            <td style="text-align:right;">${fmtIdr(p.amount)}</td>
+          </tr>`
+      )
+      .join("");
+
+    // --- total calculations ---
+    const totalCharge = fmtIdr(displayChargesTotal);
+    const totalPayment = fmtIdr(displayPaymentsTotal);
+    const balance = fmtIdr(displayBalance);
+
+    // --- placeholder replacements ---
     const placeholders = {
       "{{guestName}}": reservation?.guestName || guest?.name || "",
-      "{{roomNumber}}": Array.isArray(reservation?.roomNumbers) ? reservation.roomNumbers.join(", ") : (reservation?.roomNumber || ""),
+      "{{roomNumber}}": Array.isArray(reservation?.roomNumbers)
+        ? reservation.roomNumbers.join(", ")
+        : reservation?.roomNumber || "",
       "{{checkInDate}}": fmt(reservation?.checkInDate),
       "{{checkOutDate}}": fmt(reservation?.checkOutDate),
-      "{{balance}}": fmtIdr(displayBalance),
-      "{{staffName}}": (reservation?.createdBy || "Frontdesk")
+      "{{checkInTime}}": checkInTime,
+      "{{checkOutTime}}": checkOutTime,
+      "{{guestPhone}}": guestPhone,
+      "{{guestEmail}}": guestEmail,
+      "{{displayName}}": displayName,
+      "{{staffEmail}}": staffEmail,
+      "{{roomCharges}}": roomCharges,
+      "{{payments}}": paymentRows,
+      "{{totalCharge}}": totalCharge,
+      "{{totalPayment}}": totalPayment,
+      "{{balance}}": balance,
     };
 
-    let body = tpl.body || "";
-    Object.entries(placeholders).forEach(([key, val]) => {
-      body = body.split(key).join(val);
+    let html = `${tpl.header || ""}${tpl.body || ""}${tpl.footer || ""}`;
+    Object.entries(placeholders).forEach(([k, v]) => {
+      html = html.split(k).join(v);
     });
 
-    const header = tpl.header || "";
-    const footer = tpl.footer || "";
+    // --- auto append remaining balance section if missing ---
+    if (!html.includes("Remaining Balance")) {
+      html += `<div style="margin-top:12px; font-weight:600;">Remaining Balance: ${balance}</div>`;
+    }
 
-    return `<div style="font-family: Arial, sans-serif; color: #111;">
-      <div style="text-align:center; font-weight:700; font-size:18px; margin-bottom:10px;">${header}</div>
-      <hr/>
-      <div style="margin:10px 0;">${body}</div>
-      <hr/>
-      <div style="text-align:center; font-size:12px; margin-top:8px;">${footer}</div>
+    return `<div style="font-family:'Helvetica Neue',Arial,sans-serif; font-size:13px; color:#111;">
+      ${html}
     </div>`;
   }
 
