@@ -53,30 +53,43 @@ export default function ReservationDetailC({
     return () => { mounted = false; };
   }, []);
 
-  function renderTemplateHtml(mode) {
-    const tpl = mode === "checkin" ? templates.checkInTemplate : templates.checkOutTemplate;
-    const placeholders = {
-      "{{guestName}}": reservation?.guestName || "",
-      "{{roomNumber}}": Array.isArray(reservation?.roomNumbers) ? reservation.roomNumbers.join(", ") : (reservation?.roomNumber || ""),
-      "{{checkInDate}}": fmt(reservation?.checkInDate),
-      "{{checkOutDate}}": fmt(reservation?.checkOutDate),
-      "{{balance}}": formatCurrencyPreview(balance),
-      "{{staffName}}": "Frontdesk"
-    };
-    let body = tpl.body || "";
-    Object.entries(placeholders).forEach(([key, val]) => {
-  body = body.split(key).join(val);
-});
-    const header = tpl.header || "";
-    const footer = tpl.footer || "";
-    return `<div style="font-family: Arial, sans-serif; color: #111;">
-      <div style="text-align:center; font-weight:700; font-size:18px; margin-bottom:10px;">${header}</div>
-      <hr/>
-      <div style="margin:10px 0;">${body}</div>
-      <hr/>
-      <div style="text-align:center; font-size:12px; margin-top:8px;">${footer}</div>
-    </div>`;
-  }
+function renderTemplateHtml(mode) {
+  // guard against bad mode values
+  if (!mode || typeof mode !== "string") return "";
+  const tpl =
+    mode === "checkin"
+      ? templates.checkInTemplate
+      : mode === "checkout"
+      ? templates.checkOutTemplate
+      : { header: "", body: "", footer: "" };
+
+  const placeholders = {
+    "{{guestName}}": reservation?.guestName || "",
+    "{{roomNumber}}": Array.isArray(reservation?.roomNumbers)
+      ? reservation.roomNumbers.join(", ")
+      : reservation?.roomNumber || "",
+    "{{checkInDate}}": fmt(reservation?.checkInDate),
+    "{{checkOutDate}}": fmt(reservation?.checkOutDate),
+    "{{balance}}": formatCurrencyPreview(balance),
+    "{{staffName}}": "Frontdesk"
+  };
+
+  let body = tpl.body || "";
+  Object.entries(placeholders).forEach(([key, val]) => {
+    body = body.split(key).join(val);
+  });
+
+  const header = tpl.header || "";
+  const footer = tpl.footer || "";
+  return `<div style="font-family: Arial, sans-serif; color: #111;">
+    <div style="text-align:center; font-weight:700; font-size:18px; margin-bottom:10px;">${header}</div>
+    <hr/>
+    <div style="margin:10px 0;">${body}</div>
+    <hr/>
+    <div style="text-align:center; font-size:12px; margin-top:8px;">${footer}</div>
+  </div>`;
+}
+
 
   return (
     <div className="reservation-detail-container card">
