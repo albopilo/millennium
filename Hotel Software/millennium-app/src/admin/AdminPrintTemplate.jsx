@@ -2,106 +2,82 @@
 import React, { useEffect, useState } from "react";
 import { doc, getDoc, setDoc } from "firebase/firestore";
 import { db } from "../firebase";
-import "../styles/ReservationDetail.css";
+import "../styles/ReservationDetail.css"; // reuse some styles, or create admin-specific css
 
-export default function AdminPrintTemplate() {
+export default function AdminPrintTemplate({ permissions = [] }) {
   const [activeTab, setActiveTab] = useState("checkIn");
-  const [checkInTemplate, setCheckInTemplate] = useState({
-    header: "MILLENNIUM INN",
-    body: "<p>Welcome {{guestName}} to Millennium Inn.<br/>Room: {{roomNumber}}</p>",
-    footer: "<p>Signature: __________________</p>"
+  const [loading, setLoading] = useState(false);
+  const [templateData, setTemplateData] = useState({
+    checkInTemplate: { header: "MILLENNIUM INN", body: "<p>Welcome {{guestName}} to Millennium Inn.<br/>Your room number is {{roomNumber}}.</p>", footer: "<p>Signature: ______________________</p>" },
+    checkOutTemplate: { header: "MILLENNIUM INN", body: "<p>Thank you {{guestName}} for staying with us. Balance: {{balance}}</p>", footer: "<p>Signature: ______________________</p>" }
   });
-  const [checkOutTemplate, setCheckOutTemplate] = useState({
-    header: "MILLENNIUM INN",
-    body: "<p>Thank you {{guestName}} for staying with us.<br/>Balance: {{balance}}</p>",
-    footer: "<p>Signature: __________________</p>"
-  });
-  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
+    let mounted = true;
     async function load() {
       try {
+        setLoading(true);
         const snap = await getDoc(doc(db, "admin_print_templates", "default"));
-        if (snap.exists()) {
-          const data = snap.data();
-          if (data.checkInTemplate) setCheckInTemplate(data.checkInTemplate);
-          if (data.checkOutTemplate) setCheckOutTemplate(data.checkOutTemplate);
+        if (snap.exists() && mounted) {
+          setTemplateData({
+            checkInTemplate: snap.data().checkInTemplate || templateData.checkInTemplate,
+            checkOutTemplate: snap.data().checkOutTemplate || templateData.checkOutTemplate
+          });
         }
       } catch (err) {
-        console.warn("load templates", err);
+        console.error("AdminPrintTemplate load error", err);
+      } finally {
+        setLoading(false);
       }
     }
     load();
+    return () => { mounted = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const save = async () => {
-    setSaving(true);
     try {
-      await setDoc(doc(db, "admin_print_templates", "default"), {
-        checkInTemplate,
-        checkOutTemplate
-      }, { merge: true });
-      alert("Saved templates");
+      setLoading(true);
+      await setDoc(doc(db, "admin_print_templates", "default"), templateData, { merge: true });
+      alert("Templates saved");
     } catch (err) {
-      console.error("save templates", err);
-      alert("Failed to save");
+      console.error("save template error", err);
+      alert("Failed to save template");
     } finally {
-      setSaving(false);
+      setLoading(false);
     }
   };
 
-  const tpl = activeTab === "checkIn" ? checkInTemplate : checkOutTemplate;
-  const setTpl = (k, v) => {
-    if (activeTab === "checkIn") setCheckInTemplate({ ...checkInTemplate, [k]: v });
-    else setCheckOutTemplate({ ...checkOutTemplate, [k]: v });
-  };
-
+  const curTpl = activeTab === "checkIn" ? templateData.checkInTemplate : templateData.checkOutTemplate;
   return (
     <div className="reservation-detail-container card">
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h3>Admin Print Templates</h3>
-        <div>
-          <button className={`btn ${activeTab === "checkIn" ? "btn-primary" : "btn-secondary"}`} onClick={() => setActiveTab("checkIn")}>Check-In</button>
-          <button className={`btn ${activeTab === "checkOut" ? "btn-primary" : "btn-secondary"}`} onClick={() => setActiveTab("checkOut")}>Check-Out</button>
+      <div className="card-header">
+        <h3>Print Templates</h3>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className={`btn ${activeTab === "checkIn" ? "btn-primary" : ""}`} onClick={() => setActiveTab("checkIn")}>Check-In</button>
+          <button className={`btn ${activeTab === "checkOut" ? "btn-primary" : ""}`} onClick={() => setActiveTab("checkOut")}>Check-Out</button>
         </div>
       </div>
 
-      <div style={{ display: "flex", gap: 12, marginTop: 12 }}>
-        <div style={{ flex: 1 }}>
+      <div className="card-body">
+        <div style={{ marginBottom: 12 }}>
           <label>Header</label>
-          <input value={tpl.header} onChange={e => setTpl("header", e.target.value)} />
-          <label style={{ marginTop: 8 }}>Body (HTML allowed)</label>
-          <textarea rows={10} value={tpl.body} onChange={e => setTpl("body", e.target.value)} />
-          <label style={{ marginTop: 8 }}>Footer</label>
-          <input value={tpl.footer} onChange={e => setTpl("footer", e.target.value)} />
-          <div style={{ marginTop: 12 }}>
-            <button className="btn btn-primary" onClick={save} disabled={saving}>{saving ? "Saving…" : "💾 Save Templates"}</button>
-          </div>
+          <input value={curTpl.header} onChange={(e) => setTemplateData({ ...templateData, [activeTab === "checkIn" ? "checkInTemplate" : "checkOutTemplate"]: { ...curTpl, header: e.target.value }})} />
         </div>
 
-        <div style={{ width: 350 }}>
-          <h4>Preview</h4>
-          <div className="preview-box" style={{ padding: 10, borderRadius: 8, background: "#fff", border: "1px solid #e6eef9" }}
-            dangerouslySetInnerHTML={{
-              __html: `
-                <div style='text-align:center; font-weight:bold; font-size:18px;'>${tpl.header}</div>
-                <hr/>
-                <div style='margin:12px 0; font-size:14px;'>${tpl.body}</div>
-                <hr/>
-                <div style='text-align:center; font-size:12px;'>${tpl.footer}</div>
-              `
-            }}
-          />
-          <div style={{ marginTop: 12 }}>
-            <h5>Placeholders</h5>
-            <ul>
-              <li><code>{"{{guestName}}"}</code></li>
-              <li><code>{"{{roomNumber}}"}</code></li>
-              <li><code>{"{{checkInDate}}"}</code> / <code>{"{{checkOutDate}}"}</code></li>
-              <li><code>{"{{balance}}"}</code></li>
-              <li><code>{"{{staffName}}"}</code></li>
-            </ul>
-          </div>
+        <div style={{ marginBottom: 12 }}>
+          <label>Body (HTML allowed). Use placeholders: {{guestName}}, {{roomNumber}}, {{checkInDate}}, {{checkOutDate}}, {{balance}}, {{staffName}}</label>
+          <textarea rows={8} value={curTpl.body} onChange={(e) => setTemplateData({ ...templateData, [activeTab === "checkIn" ? "checkInTemplate" : "checkOutTemplate"]: { ...curTpl, body: e.target.value }})} style={{ width: "100%" }} />
+        </div>
+
+        <div style={{ marginBottom: 12 }}>
+          <label>Footer</label>
+          <input value={curTpl.footer} onChange={(e) => setTemplateData({ ...templateData, [activeTab === "checkIn" ? "checkInTemplate" : "checkOutTemplate"]: { ...curTpl, footer: e.target.value }})} />
+        </div>
+
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="btn btn-primary" onClick={save} disabled={loading}>Save</button>
+          <button className="btn btn-secondary" onClick={() => { /* reset or reload */ }}>Cancel</button>
         </div>
       </div>
     </div>

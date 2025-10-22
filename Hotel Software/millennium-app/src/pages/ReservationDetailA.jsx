@@ -15,44 +15,22 @@ import {
   onSnapshot,
   orderBy
 } from "firebase/firestore";
-import { db } from "../firebase"; // adjust path if needed
+import { db } from "../firebase";
 import ReservationDetailB from "./ReservationDetailB";
 import ReservationDetailC from "./ReservationDetailC";
-import "../styles/ReservationDetail.css";
 
 /**
- * Full controller: fetch reservation, rates, show UI, create forecasts per-room-per-day,
- * ensure deposit postings, convert forecasts at check-in, handle add charge/payment,
- * preview helpers for live IDR display (no input debounce).
+ * Controller that preserves original logic:
+ * - loads reservation and related data
+ * - createForecastRoomPostings / ensureDepositPosting / convertForecastsToPosted
+ * - submitCharge / submitPayment
+ * - doCheckIn / doCheckOut
+ *
+ * This rewrite keeps all functions and logic but cleans up:
+ * - defensive printing guards
+ * - no input debounce for numeric typing (we parse numbers on submit)
+ * - improved UI hooks (pass formatted previews)
  */
-
-function onlyDigits(s = "") {
-  return (s + "").replace(/[^\d]/g, "");
-}
-function toInt(s = "") {
-  const n = parseInt(onlyDigits(s), 10);
-  return Number.isNaN(n) ? 0 : n;
-}
-function fmtIdr(n = 0) {
-  return `IDR ${Number(n || 0).toLocaleString("id-ID")}`;
-}
-function iterateDates(checkIn, checkOut) {
-  // accepts Date or timestamp-like values
-  const start = new Date(checkIn);
-  const end = new Date(checkOut);
-  const out = [];
-  const cur = new Date(start.getFullYear(), start.getMonth(), start.getDate());
-  while (cur < end) {
-    out.push(new Date(cur));
-    cur.setDate(cur.getDate() + 1);
-  }
-  return out;
-}
-function isWeekend(date) {
-  const d = new Date(date);
-  const day = d.getDay(); // 0 Sun ... 6 Sat
-  return day === 0 || day === 6;
-}
 
 export default function ReservationDetailA({ permissions = [], currentUser = null, userData = null }) {
   const { id } = useParams();
@@ -62,246 +40,456 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
   // permissions
   const can = (p) => permissions.includes(p) || permissions.includes("*");
   const canOperate = can("canOperateFrontDesk") || can("canEditReservations");
+  const canUpgrade = can("canUpgradeRoom") || can("canOverrideRoomType");
   const canOverrideBilling = can("canOverrideBilling");
+  const isAdmin = userData?.roleId === "admin";
 
-  // data state
+  // state
   const [reservation, setReservation] = useState(null);
   const [rooms, setRooms] = useState([]);
   const [stays, setStays] = useState([]);
   const [postings, setPostings] = useState([]);
   const [payments, setPayments] = useState([]);
   const [rates, setRates] = useState([]);
+  const [events, setEvents] = useState([]);
+  const [channels, setChannels] = useState([]);
+  const [guest, setGuest] = useState(null);
   const [settings, setSettings] = useState({ currency: "IDR", depositPerRoom: 0 });
-  const [loading, setLoading] = useState(false);
   const [logs, setLogs] = useState([]);
-  const printRef = React.useRef(null);
-  const [printMode, setPrintMode] = useState(null);
+  const [loading, setLoading] = useState(false);
 
-  // UI local forms
+  // UI
   const [assignRooms, setAssignRooms] = useState([]);
   const [showAddCharge, setShowAddCharge] = useState(false);
   const [chargeForm, setChargeForm] = useState({ description: "", qtyStr: "1", unitStr: "", accountCode: "MISC" });
   const [showAddPayment, setShowAddPayment] = useState(false);
-  const [paymentForm, setPaymentForm] = useState({ amountStr: "", method: "cash", refNo: "" });
+  const [paymentForm, setPaymentForm] = useState({ amountStr: "", method: "cash", refNo: "", type: "payment" });
 
-  // load reservation + related data
-  async function loadAll() {
-    if (!id) return;
+  // print
+  const printRef = useRef(null);
+  const [printMode, setPrintMode] = useState(null);
+
+  // defensive refs (prevent concurrent forecast creation)
+  const creatingForecastsRef = useRef(false);
+  const skippedZeroRateWarningsRef = useRef(new Set());
+
+  // helpers: parse free typing numeric inputs (no debounce)
+  const onlyDigits = (s) => (s || "").toString().replace(/[^\d]/g, "");
+  const toInt = (s) => {
+    const k = onlyDigits(s);
+    return k ? parseInt(k, 10) : 0;
+  };
+  const fmtIdr = (n) => `IDR ${Number(n || 0).toLocaleString("id-ID")}`;
+
+  // basic helpers
+  const statusOf = (p) => ((p?.status || "") + "").toLowerCase();
+  const acctOf = (p) => ((p?.accountCode || "") + "").toUpperCase();
+
+  // date helpers (small, compatible versions)
+  const datesInStay = (resObj) => {
+    if (!resObj?.checkInDate || !resObj?.checkOutDate) return [];
+    const a = resObj.checkInDate?.toDate ? resObj.checkInDate.toDate() : new Date(resObj.checkInDate);
+    const b = resObj.checkOutDate?.toDate ? resObj.checkOutDate.toDate() : new Date(resObj.checkOutDate);
+    const out = [];
+    const cur = new Date(a.getFullYear(), a.getMonth(), a.getDate());
+    while (cur < b) {
+      out.push(new Date(cur));
+      cur.setDate(cur.getDate() + 1);
+    }
+    return out;
+  };
+  const sameMonthDay = (d1, d2) => d1.getMonth() === d2.getMonth() && d1.getDate() === d2.getDate();
+
+  // rateFor — search rates collection then channels then room fallback
+  const rateFor = (roomType, channelName, date, roomDoc = null, channelList = null) => {
+    const normalize = (s) => (s || "").toString().trim().toLowerCase();
+    const channelId = normalize(channelName);
+    const rtype = (roomType || "").trim();
+
+    // 1) rates state
+    let rd = rates.find((r) => normalize(r.roomType) === normalize(rtype) && normalize(r.channelId) === channelId);
+    if (!rd) rd = rates.find((r) => normalize(r.roomType) === normalize(rtype));
+    if (rd) {
+      if (channelId === "direct") {
+        const day = date.getDay();
+        const weekend = day === 0 || day === 6;
+        return weekend ? Number(rd.weekendRate || 0) : Number(rd.weekdayRate || 0);
+      }
+      return Number(rd.price || rd.baseRate || rd.nightlyRate || 0);
+    }
+
+    // 2) channels fallback
+    const chList = channelList || channels || [];
+    const chDoc = chList.find((c) => (c.name || "").toString().trim().toLowerCase() === channelId);
+    if (chDoc) {
+      if (channelId === "direct") {
+        const day = date.getDay();
+        const weekend = day === 0 || day === 6;
+        const rateMap = weekend ? chDoc.weekendRate || {} : chDoc.weekdayRate || {};
+        const maybe = rateMap[roomType] ?? rateMap[rtype];
+        if (maybe != null && Number(maybe) > 0) return Number(maybe);
+      } else {
+        if (chDoc.price && Number(chDoc.price) > 0) return Number(chDoc.price);
+      }
+    }
+
+    // 3) roomDoc fallback
+    if (roomDoc) {
+      const fallbacks = ["defaultRate", "rates", "price", "baseRate", "nightlyRate", "roomRate"];
+      for (const k of fallbacks) {
+        if (roomDoc[k] != null && Number(roomDoc[k]) > 0) return Number(roomDoc[k]);
+      }
+    }
+
+    console.warn("rateFor: could not find rate", { roomType, channelName, date });
+    return 0;
+  };
+
+  // deposit normalization: ensures a single canonical deposit posting (reservationId + '_DEPOSIT')
+  async function ensureDepositPosting(resObj, assignedRooms = []) {
+    const depositPerRoom = Number(resObj.depositPerRoom ?? settings.depositPerRoom ?? 0);
+    const count = Array.isArray(assignedRooms) ? assignedRooms.length : 0;
+    const depositTotal = depositPerRoom * count;
+    if (depositTotal <= 0) return;
+
+    const pSnap = await getDocs(query(collection(db, "postings"), where("reservationId", "==", resObj.id)));
+    const existing = pSnap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((p) => (p.accountCode || "").toUpperCase() === "DEPOSIT");
+    const depositDocId = `${resObj.id}_DEPOSIT`;
+    const depositRef = doc(db, "postings", depositDocId);
+
+    if (existing.length > 0) {
+      const primary = existing.find((p) => p.id === depositDocId) || existing[0];
+      const desiredStatus = (resObj.status || "").toLowerCase() === "checked-in" ? "posted" : "forecast";
+      try {
+        await setDoc(depositRef, {
+          reservationId: resObj.id,
+          stayId: null,
+          roomNumber: null,
+          description: "Security Deposit",
+          amount: depositTotal,
+          tax: 0,
+          service: 0,
+          status: desiredStatus,
+          accountCode: "DEPOSIT",
+          createdAt: primary.createdAt || new Date(),
+          createdBy: primary.createdBy || actorName
+        }, { merge: true });
+      } catch (err) {
+        console.log("ensureDepositPosting: failed canonical set", err);
+      }
+
+      // void duplicates
+      for (const dup of existing) {
+        if (dup.id === depositDocId) continue;
+        try {
+          if ((dup.status || "").toLowerCase() !== "void") {
+            await updateDoc(doc(db, "postings", dup.id), { status: "void" });
+          }
+        } catch (err) {
+          console.log("ensureDepositPosting: void dup failed", dup.id, err);
+        }
+      }
+      return;
+    }
+
+    try {
+      await setDoc(depositRef, {
+        reservationId: resObj.id,
+        stayId: null,
+        roomNumber: null,
+        description: "Security Deposit",
+        amount: depositTotal,
+        tax: 0,
+        service: 0,
+        status: (resObj.status || "").toLowerCase() === "checked-in" ? "posted" : "forecast",
+        accountCode: "DEPOSIT",
+        createdAt: new Date(),
+        createdBy: actorName
+      });
+    } catch (err) {
+      console.log("ensureDepositPosting: create fail", err);
+    }
+  }
+
+  // create per-room-per-night forecast postings (keeps original logic)
+  const createForecastRoomPostings = async (resObj, assigned = [], g = null, allRooms = [], channelList = null) => {
+    if (!resObj) return;
+    if (creatingForecastsRef.current) return;
+    creatingForecastsRef.current = true;
+    try {
+      const nights = datesInStay(resObj);
+      const pct = (g && ((g.tier || "").toLowerCase() === "silver" ? 0.05 : (g.tier === "Gold" ? 0.10 : 0))) || 0;
+      const bday = g?.birthdate ? new Date(g.birthdate) : null;
+      const pSnapAll = await getDocs(query(collection(db, "postings"), where("reservationId", "==", resObj.id)));
+      const existingPostings = pSnapAll.docs.map((d) => ({ id: d.id, ...d.data() }));
+
+      const assignedDocs = (assigned || []).map((n) => allRooms.find((r) => r.roomNumber === n)).filter(Boolean);
+      const firstDeluxeAssigned = assignedDocs.find((r) => (r.roomType || "").toLowerCase() === "deluxe");
+      const year = new Date().getFullYear();
+      const alreadyClaimed = Number(g?.lastBirthdayClaimYear || 0) === year;
+      const applyBirthday = (resObj.channel || "").toLowerCase() === "direct" && bday && !alreadyClaimed;
+
+      for (let idx = 0; idx < (assigned || []).length; idx++) {
+        const roomNumber = assigned[idx];
+        const roomDoc = allRooms.find((r) => r.roomNumber === roomNumber);
+        if (!roomDoc) continue;
+
+        for (const dRaw of nights) {
+          const d = new Date(dRaw);
+          // compute base (events override or rateFor)
+          let base = 0;
+          const ev = events.find((ev) => {
+            const s = new Date(ev.startDate);
+            const e = new Date(ev.endDate);
+            return d >= s && d <= e;
+          });
+          if (ev && ev.rateType === "custom" && ev.customRates && ev.customRates[roomDoc.roomType] != null) {
+            base = Number(ev.customRates[roomDoc.roomType]);
+          } else {
+            base = rateFor(roomDoc.roomType, resObj.channel, d, roomDoc, channelList);
+          }
+
+          if (!base || base <= 0) {
+            const key = `${roomNumber}|${d.toISOString().slice(0, 10)}`;
+            if (!skippedZeroRateWarningsRef.current.has(key)) {
+              skippedZeroRateWarningsRef.current.add(key);
+              console.warn(`createForecastRoomPostings: skipping zero base rate for ${roomNumber} on ${d.toISOString()}`, { roomDoc, ev, base });
+            }
+            continue;
+          }
+
+          let net = Number(base) * (1 - pct);
+
+          if (applyBirthday && bday && sameMonthDay(d, bday)) {
+            if ((g?.tier || "").toLowerCase() === "silver") {
+              if (idx === 0) net -= Number(base) * 0.5;
+            } else if ((g?.tier || "").toLowerCase() === "gold") {
+              if ((roomDoc.roomType || "").toLowerCase() === "deluxe" && (!firstDeluxeAssigned || firstDeluxeAssigned.roomNumber === roomDoc.roomNumber)) {
+                net -= Number(base);
+              }
+            }
+            if (net < 0) net = 0;
+          }
+
+          const description = `Room charge ${roomDoc.roomType} ${d.toISOString().slice(0, 10)}`;
+
+          const alreadyExists = existingPostings.some((ep) => {
+            const sameAccount = (ep.accountCode || "").toUpperCase() === "ROOM";
+            const sameRoom = ep.roomNumber === roomNumber;
+            const sameDesc = ((ep.description || "") + "").trim().toLowerCase() === (description + "").trim().toLowerCase();
+            const sameStatus = ep.status === "forecast" || ep.status === "posted";
+            return sameAccount && sameRoom && sameDesc && sameStatus;
+          });
+          if (alreadyExists) continue;
+
+          try {
+            const ref = await addDoc(collection(db, "postings"), {
+              reservationId: resObj.id,
+              stayId: null,
+              roomNumber,
+              description,
+              amount: Math.round(net),
+              tax: 0,
+              service: 0,
+              status: "forecast",
+              accountCode: "ROOM",
+              createdAt: new Date(),
+              createdBy: actorName
+            });
+            existingPostings.push({ id: ref.id, reservationId: resObj.id, roomNumber, description, accountCode: "ROOM", status: "forecast", amount: Math.round(net) });
+          } catch (err) {
+            console.log("createForecastRoomPostings: addDoc failed", err);
+          }
+        }
+      }
+    } finally {
+      creatingForecastsRef.current = false;
+    }
+  };
+
+  // convert forecast postings to posted (used on check-in)
+  async function convertForecastsToPosted(stayMapByRoom = {}) {
+    const snap = await getDocs(query(collection(db, "postings"), where("reservationId", "==", reservation.id)));
+    const forecasts = snap.docs.filter(d => {
+      const p = d.data();
+      return p.status === "forecast" && (p.accountCode === "ROOM" || p.accountCode === "DEPOSIT");
+    });
+    for (const fdoc of forecasts) {
+      const pData = fdoc.data();
+      const stayId = pData.accountCode === "ROOM" ? (stayMapByRoom[pData.roomNumber] || null) : null;
+      try {
+        await updateDoc(doc(db, "postings", fdoc.id), { status: "posted", stayId });
+      } catch (err) {
+        console.log("convertForecastsToPosted: update failed", fdoc.id, err);
+      }
+    }
+  }
+
+  // load everything
+  const load = async () => {
     setLoading(true);
     try {
-      const resSnap = await getDoc(doc(db, "reservations", id));
+      const [resSnap, roomsSnap, settingsSnap, ratesSnap, eventsSnap, channelsSnap] = await Promise.all([
+        getDoc(doc(db, "reservations", id)),
+        getDocs(collection(db, "rooms")),
+        getDoc(doc(db, "settings", "general")),
+        getDocs(collection(db, "rates")),
+        getDocs(collection(db, "events")),
+        getDocs(collection(db, "channels"))
+      ]);
       if (!resSnap.exists()) {
         navigate("/calendar");
         return;
       }
       const res = { id: resSnap.id, ...resSnap.data() };
+      if ((res.status || "").toLowerCase() === "deleted") {
+        navigate("/calendar");
+        return;
+      }
       setReservation(res);
-      setAssignRooms(Array.isArray(res.roomNumbers) ? [...res.roomNumbers] : (res.roomNumber ? [res.roomNumber] : []));
+      setRooms(roomsSnap.docs.map(d => d.data()));
+      if (settingsSnap.exists()) setSettings(settingsSnap.data());
+      setRates(ratesSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+      setEvents(eventsSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+      setChannels(channelsSnap.docs.map(d => ({ id: d.id, ...d.data() })));
 
-      const [roomsSnap, staysSnap, postingsSnap, paymentsSnap, ratesSnap, settingsSnap] = await Promise.all([
-        getDocs(collection(db, "rooms")),
+      const initialAssigned = Array.isArray(res.roomNumbers) ? [...res.roomNumbers] : (res.roomNumber ? [res.roomNumber] : []);
+      setAssignRooms(initialAssigned);
+
+      // guest lookup
+      let g = null;
+      if (res.guestId) {
+        const gSnap = await getDoc(doc(db, "guests", res.guestId));
+        if (gSnap.exists()) g = { id: gSnap.id, ...gSnap.data() };
+      }
+      if (!g) {
+        const gQ = query(collection(db, "guests"), where("name", "==", res.guestName || ""));
+        const gSnap = await getDocs(gQ);
+        if (!gSnap.empty) g = { id: gSnap.docs[0].id, ...gSnap.docs[0].data() };
+      }
+      setGuest(g);
+
+      // stays, postings, payments
+      const [sSnap, pSnap, paySnap] = await Promise.all([
         getDocs(query(collection(db, "stays"), where("reservationId", "==", res.id))),
         getDocs(query(collection(db, "postings"), where("reservationId", "==", res.id))),
-        getDocs(query(collection(db, "payments"), where("reservationId", "==", res.id))),
-        getDocs(collection(db, "rates")),
-        getDoc(doc(db, "settings", "general"))
+        getDocs(query(collection(db, "payments"), where("reservationId", "==", res.id)))
       ]);
+      setStays(sSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+      setPostings(pSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+      setPayments(paySnap.docs.map(d => ({ id: d.id, ...d.data() })));
 
-      setRooms(roomsSnap.docs.map(d => ({ id: d.id, ...d.data() })));
-      setStays(staysSnap.docs.map(d => ({ id: d.id, ...d.data() })));
-      setPostings(postingsSnap.docs.map(d => ({ id: d.id, ...d.data() })));
-      setPayments(paymentsSnap.docs.map(d => ({ id: d.id, ...d.data() })));
-      setRates(ratesSnap.docs.map(d => ({ id: d.id, ...d.data() })));
-      if (settingsSnap.exists()) setSettings(settingsSnap.data());
+      // create forecasts when booked and assigned but no forecast exists (preserve prior behavior)
+      if ((res.status || "").toLowerCase() === "booked" && initialAssigned.length > 0) {
+        const pList = pSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+        const hasForecastRoom = pList.some(p => (p.status || "posted") === "forecast" && p.accountCode === "ROOM");
+        if (!hasForecastRoom) {
+          await createForecastRoomPostings(res, initialAssigned, g, roomsSnap.docs.map(d => d.data()), channelsSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+          await ensureDepositPosting(res, initialAssigned);
+          const p2 = await getDocs(query(collection(db, "postings"), where("reservationId", "==", res.id)));
+          setPostings(p2.docs.map(d => ({ id: d.id, ...d.data() })));
+        } else {
+          await ensureDepositPosting(res, initialAssigned);
+          const p2 = await getDocs(query(collection(db, "postings"), where("reservationId", "==", res.id)));
+          setPostings(p2.docs.map(d => ({ id: d.id, ...d.data() })));
+        }
+      }
+
     } catch (err) {
-      console.error("loadAll error", err);
+      console.error("load error", err);
     } finally {
       setLoading(false);
     }
-  }
+  };
 
   useEffect(() => {
-    if (id) loadAll();
+    if (id) load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
+  // subscribe to logs
   useEffect(() => {
     if (!reservation?.id) return;
-    const q = query(collection(doc(db, "reservations", reservation.id), "logs"), orderBy("createdAt", "desc"));
+    const collRef = collection(doc(db, "reservations", reservation.id), "logs");
+    const q = query(collRef, orderBy("createdAt", "desc"));
     const unsub = onSnapshot(q, snap => setLogs(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
     return () => unsub();
   }, [reservation?.id]);
 
-  // Rate lookup: find rate doc that matches reservation.channel + roomType
-  function findRateForRoom(roomType, channelId) {
-    // try exact match: both roomType and channelId
-    let found = rates.find(r => (r.roomType || "") === (roomType || "") && (r.channelId || "") === (channelId || ""));
-    if (found) return found;
-
-    // try match only roomType
-    found = rates.find(r => (r.roomType || "") === (roomType || ""));
-    if (found) return found;
-
-    // try channel default
-    found = rates.find(r => (r.channelId || "") === (channelId || ""));
-    return found || null;
-  }
-
-  // Create forecast postings per-room-per-night
-  async function createForecastRoomPostings(resDoc, assignedRooms = []) {
-    if (!resDoc || !resDoc.checkInDate || !resDoc.checkOutDate) return [];
-    const nights = iterateDates(resDoc.checkInDate, resDoc.checkOutDate);
-    if (!nights.length) return [];
-
-    const created = [];
-    for (const roomNumber of assignedRooms) {
-      // find room document to get roomType (room docs may store roomType)
-      const roomDoc = rooms.find(r => (r.roomNumber || r.id) + "" === (roomNumber + ""));
-      const roomType = roomDoc?.roomType || resDoc.roomType || "";
-
-      for (const night of nights) {
-        // pick appropriate rate document (channel-specific)
-        const rateDoc = findRateForRoom(roomType, resDoc.channel);
-        const unit = rateDoc
-          ? (isWeekend(night) ? Number(rateDoc.weekendRate || 0) : Number(rateDoc.weekdayRate || 0))
-          : Number(resDoc.rate || 0);
-
-        const desc = rateDoc?.name ? `${rateDoc.name} — ${night.toLocaleDateString()}` : `Room ${roomNumber} — ${night.toLocaleDateString()}`;
-
-        const posting = {
-          reservationId: resDoc.id,
-          stayId: null,
-          roomNumber,
-          description: desc,
-          amount: unit,
-          tax: 0,
-          service: 0,
-          quantity: 1,
-          unitAmount: unit,
-          accountCode: "ROOM",
-          status: "forecast",
-          date: night.toISOString(),
-          createdAt: new Date(),
-          createdBy: actorName
-        };
-        const ref = await addDoc(collection(db, "postings"), posting);
-        created.push({ id: ref.id, ...posting });
-      }
-    }
-    return created;
-  }
-
-  // Ensure deposit posting per room (doesn't duplicate existing active deposits)
-  async function ensureDepositPosting(resDoc, assignedRooms = []) {
-    const depositPerRoom = Number(resDoc.depositPerRoom ?? settings.depositPerRoom ?? 0);
-    if (!depositPerRoom || depositPerRoom <= 0) return [];
-    const created = [];
-    for (const roomNumber of assignedRooms) {
-      const q = query(collection(db, "postings"),
-        where("reservationId", "==", resDoc.id),
-        where("roomNumber", "==", roomNumber),
-        where("accountCode", "==", "DEPOSIT"));
-      const snap = await getDocs(q);
-      const hasActive = snap.docs.some(d => ((d.data()?.status || "") + "").toLowerCase() !== "void");
-      if (!hasActive) {
-        const posting = {
-          reservationId: resDoc.id,
-          stayId: null,
-          roomNumber,
-          description: "Security deposit",
-          amount: depositPerRoom,
-          tax: 0,
-          service: 0,
-          quantity: 1,
-          unitAmount: depositPerRoom,
-          accountCode: "DEPOSIT",
-          status: "forecast",
-          date: resDoc.checkInDate,
-          createdAt: new Date(),
-          createdBy: actorName
-        };
-        const ref = await addDoc(collection(db, "postings"), posting);
-        created.push({ id: ref.id, ...posting });
-      }
-    }
-    return created;
-  }
-
-  // Convert forecast postings to posted (used on check-in)
-  async function convertForecastsToPosted(reservationId) {
-    const q = query(collection(db, "postings"), where("reservationId", "==", reservationId), where("status", "==", "forecast"));
-    const snap = await getDocs(q);
-    const updates = [];
-    for (const d of snap.docs) {
-      const pRef = doc(db, "postings", d.id);
-      await updateDoc(pRef, { status: "posted", postedAt: new Date() });
-      updates.push(d.id);
-    }
-    return updates;
-  }
-
-  // Submit charge (parses on submit; no input debounce)
-  async function submitCharge() {
+  // Submit charge (no debounce; parse on submit)
+  const submitCharge = async () => {
     const qty = Math.max(1, toInt(chargeForm.qtyStr));
     const unit = Math.max(0, toInt(chargeForm.unitStr));
     const total = qty * unit;
-    if (!chargeForm.description.trim()) { alert("Description required"); return; }
+    if (!chargeForm.description?.trim()) { alert("Description required"); return; }
     if (total <= 0) { alert("Total must be > 0"); return; }
     const status = (reservation?.status || "").toLowerCase() === "checked-in" ? "posted" : "forecast";
-    await addDoc(collection(db, "postings"), {
-      reservationId: reservation.id,
-      stayId: null,
-      roomNumber: null,
-      description: chargeForm.description.trim(),
-      amount: total,
-      tax: 0,
-      service: 0,
-      quantity: qty,
-      unitAmount: unit,
-      accountCode: (chargeForm.accountCode || "MISC").toUpperCase(),
-      status,
-      createdAt: new Date(),
-      createdBy: actorName
-    });
-    setShowAddCharge(false);
-    setChargeForm({ description: "", qtyStr: "1", unitStr: "", accountCode: "MISC" });
-    await loadAll();
-  }
+    try {
+      await addDoc(collection(db, "postings"), {
+        reservationId: reservation.id,
+        stayId: null,
+        roomNumber: null,
+        description: chargeForm.description.trim(),
+        amount: total,
+        tax: 0,
+        service: 0,
+        quantity: qty,
+        unitAmount: unit,
+        accountCode: (chargeForm.accountCode || "MISC").toUpperCase(),
+        status,
+        createdAt: new Date(),
+        createdBy: actorName
+      });
+      setShowAddCharge(false);
+      setChargeForm({ description: "", qtyStr: "1", unitStr: "", accountCode: "MISC" });
+      await load();
+    } catch (err) {
+      console.error("submitCharge error", err);
+      alert("Failed to add charge");
+    }
+  };
 
-  // Submit payment
-  async function submitPayment() {
+  // Submit payment (no debounce; parse on submit)
+  const submitPayment = async () => {
     const amt = Math.max(0, toInt(paymentForm.amountStr));
     if (amt <= 0) { alert("Payment must be > 0"); return; }
-    await addDoc(collection(db, "payments"), {
-      reservationId: reservation.id,
-      stayId: null,
-      method: paymentForm.method || "cash",
-      amount: amt,
-      refNo: paymentForm.refNo || "",
-      capturedAt: new Date(),
-      capturedBy: actorName,
-      type: "payment"
-    });
-    setShowAddPayment(false);
-    setPaymentForm({ amountStr: "", method: "cash", refNo: "" });
-    await loadAll();
-  }
+    try {
+      await addDoc(collection(db, "payments"), {
+        reservationId: reservation.id,
+        stayId: null,
+        method: paymentForm.method || "cash",
+        amount: amt,
+        refNo: paymentForm.refNo || "",
+        capturedAt: new Date(),
+        capturedBy: actorName,
+        type: paymentForm.type || "payment"
+      });
+      setShowAddPayment(false);
+      setPaymentForm({ amountStr: "", method: "cash", refNo: "", type: "payment" });
+      await load();
+    } catch (err) {
+      console.error("submitPayment error", err);
+      alert("Failed to add payment");
+    }
+  };
 
-  // Check-in flow (create stays, convert forecasts, ensure deposit)
-  async function doCheckIn() {
+  // Check-in flow
+  const doCheckIn = async () => {
     if (!reservation) return;
+    if ((reservation.status || "").toLowerCase() !== "booked") { alert("Reservation is not booked"); return; }
     if (!assignRooms.length) { alert("Assign at least one room"); return; }
     setLoading(true);
     try {
-      await runTransaction(db, async (tx) => {
+      const stayMap = {};
+      await runTransaction(db, async tx => {
         const resRef = doc(db, "reservations", reservation.id);
         const resSnap = await tx.get(resRef);
-        if (!resSnap.exists()) throw new Error("Reservation missing");
+        if (!resSnap.exists()) throw new Error("Reservation not found");
         for (const roomNumber of assignRooms) {
           const stayRef = doc(collection(db, "stays"));
           tx.set(stayRef, {
             reservationId: reservation.id,
-            guestId: reservation.guestId || null,
+            guestId: guest?.id || null,
             guestName: reservation.guestName || "",
             roomNumber,
             checkInDate: reservation.checkInDate,
@@ -312,31 +500,28 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
             currency: settings.currency || "IDR",
             createdBy: actorName
           });
-          // mark room occupied (room doc id presumed to be roomNumber)
-          tx.update(doc(db, "rooms", roomNumber), { status: "Occupied", lastOccupiedAt: new Date() });
+          stayMap[roomNumber] = stayRef.id;
+          tx.update(doc(db, "rooms", roomNumber), { status: "Occupied" });
         }
         tx.update(resRef, { status: "checked-in", checkedInAt: new Date(), roomNumbers: assignRooms });
       });
 
-      // convert forecasts then ensure deposits
-      await convertForecastsToPosted(reservation.id);
+      await convertForecastsToPosted(stayMap);
       await ensureDepositPosting(reservation, assignRooms);
-      await loadAll();
       alert("Checked in");
+      await load();
     } catch (err) {
-      console.error("doCheckIn error:", err);
+      console.error("doCheckIn error", err);
       alert("Check-in failed: " + (err.message || err));
     } finally {
       setLoading(false);
     }
-  }
+  };
 
-  // Check-out flow (close stays, create HK tasks, mark reservation checked-out)
-  async function doCheckOut() {
-    if (!reservation) return;
-    // compute balance
-    const charges = (postings || []).filter(p => (p.status || "").toLowerCase() !== "void").reduce((s, p) => s + Number(p.amount || 0), 0);
-    const pays = (payments || []).filter(p => (p.status || "").toLowerCase() !== "void").reduce((s, p) => s + Number(p.amount || 0), 0);
+  // Check-out flow
+  const doCheckOut = async () => {
+    const charges = (postings || []).filter(p => statusOf(p) !== "void").reduce((s, p) => s + Number(p.amount || 0), 0);
+    const pays = (payments || []).filter(p => statusOf(p) !== "void").reduce((s, p) => s + Number(p.amount || 0), 0);
     const balance = charges - pays;
     if (balance > 0.01 && !canOverrideBilling) {
       alert(`Outstanding ${fmtIdr(balance)}. Override required to check out.`);
@@ -344,7 +529,7 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
     }
     setLoading(true);
     try {
-      await runTransaction(db, async (tx) => {
+      await runTransaction(db, async tx => {
         const openStays = stays.filter(s => (s.status || "") === "open");
         for (const s of openStays) {
           tx.update(doc(db, "stays", s.id), { status: "closed", closedAt: new Date() });
@@ -362,101 +547,194 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
         }
         tx.update(doc(db, "reservations", reservation.id), { status: "checked-out", checkedOutAt: new Date() });
       });
-      await loadAll();
       alert("Checked out");
+      await load();
     } catch (err) {
-      console.error("doCheckOut error:", err);
+      console.error("doCheckOut error", err);
       alert("Check-out failed: " + (err.message || err));
     } finally {
       setLoading(false);
     }
-  }
+  };
 
-  // Print actions (link to admin print template via ReservationDetailC)
+  // Print handlers, linked to AdminPrintTemplate stored doc (admin_print_templates/default)
+  // We only allow print check-in when reservation is checked-in; print check-out only when checked-out.
   function printCheckInForm() {
     if (!reservation) return;
-    if ((reservation.status || "").toLowerCase() === "checked-out") return;
+    if ((reservation.status || "").toLowerCase() !== "checked-in") {
+      alert("Cannot print check-in form until reservation is checked-in.");
+      return;
+    }
     setPrintMode("checkin");
-    setTimeout(() => { window.print(); setPrintMode(null); }, 80);
+    // allow render then open print dialog
+    setTimeout(() => {
+      window.print();
+      setTimeout(() => setPrintMode(null), 300);
+    }, 100);
   }
   function printCheckOutForm() {
     if (!reservation) return;
-    if ((reservation.status || "").toLowerCase() !== "checked-out") return;
+    if ((reservation.status || "").toLowerCase() !== "checked-out") {
+      alert("Cannot print check-out form until reservation is checked-out.");
+      return;
+    }
     setPrintMode("checkout");
-    setTimeout(() => { window.print(); setPrintMode(null); }, 80);
+    setTimeout(() => {
+      window.print();
+      setTimeout(() => setPrintMode(null), 300);
+    }, 100);
   }
 
-  // Derived visible postings & totals
-  const visiblePostings = useMemo(() => (postings || []).filter(p => ((p.status || "") + "").toLowerCase() !== "void"), [postings]);
-  const chargeLines = useMemo(() => visiblePostings.filter(p => ((p.accountCode || "") + "").toUpperCase() !== "PAY"), [visiblePostings]);
-  const paymentsTotal = useMemo(() => (payments || []).reduce((s, p) => s + Number(p.amount || 0), 0), [payments]);
-  const chargesTotal = useMemo(() => chargeLines.reduce((s, p) => s + Number(p.amount || 0), 0), [chargeLines]);
-  const balanceTotal = chargesTotal - paymentsTotal;
+  // Derived totals
+  const visiblePostings = useMemo(() => (postings || []).filter(p => statusOf(p) !== "void"), [postings]);
+  const displayChargeLines = useMemo(() => {
+    const targetStatus = (reservation?.status || "").toLowerCase() === "booked" ? "forecast" : "posted";
+    return visiblePostings.filter(p => statusOf(p) === targetStatus && acctOf(p) !== "PAY");
+  }, [visiblePostings, reservation]);
 
-  // Live preview helpers (IDR -> 'id-ID')
-  const formatCurrencyPreview = (rawNumberOrStr) => {
-    const num = Number(rawNumberOrStr || 0);
-    return `IDR ${Number(num || 0).toLocaleString("id-ID")}`;
-  };
-  const chargePreviewTotal = () => {
-    const qty = Math.max(1, toInt(chargeForm.qtyStr));
-    const unit = Math.max(0, toInt(chargeForm.unitStr));
-    return formatCurrencyPreview(qty * unit);
-  };
-  const paymentPreviewAmount = () => {
-    const amt = Math.max(0, toInt(paymentForm.amountStr));
-    return formatCurrencyPreview(amt);
-  };
+  const displayChargesTotal = useMemo(() => displayChargeLines.reduce((s, p) => s + Number(p.amount || 0) + Number(p.tax || 0) + Number(p.service || 0), 0), [displayChargeLines]);
+  const displayPaymentsTotal = useMemo(() => (payments || []).filter(p => statusOf(p) !== "void" && statusOf(p) !== "refunded").reduce((s, p) => s + Number(p.amount || 0), 0), [payments]);
+  const displayBalance = displayChargesTotal - displayPaymentsTotal;
 
-  if (loading || !reservation) return <div style={{ padding: 20 }}>Loading reservation…</div>;
+  // small fmt helper (used by children)
+  const fmt = (d) => (d ? new Date(d).toLocaleString() : "-");
+
+  if (loading || !reservation) {
+    return <div style={{ padding: 20 }}>Loading reservation…</div>;
+  }
 
   return (
     <div>
-      <ReservationDetailB
-        reservation={reservation}
-        assignRooms={assignRooms}
-        setAssignRooms={async (next) => {
-          setAssignRooms(next);
-          try {
-            await updateDoc(doc(db, "reservations", reservation.id), { roomNumbers: next });
-            // create forecasts for newly assigned rooms (basic strategy: create forecasts for assigned rooms)
-            await createForecastRoomPostings(reservation, next);
-            await ensureDepositPosting(reservation, next);
-            await loadAll();
-          } catch (err) { console.error("setAssignRooms persist error", err); }
-        }}
-        doCheckIn={doCheckIn}
-        doCheckOut={doCheckOut}
-        printCheckInForm={printCheckInForm}
-        printCheckOutForm={printCheckOutForm}
-        stays={stays}
-        fmt={(d) => (d ? new Date(d).toLocaleString() : "-")}
-      />
+      {/* When printMode is set we render ReservationDetailC alone (the printable content) */}
+      {printMode ? (
+        <ReservationDetailC
+          printRef={printRef}
+          printMode={printMode}
+          reservation={reservation}
+          settings={settings}
+          fmt={fmt}
+          postings={postings}
+          visiblePostings={visiblePostings}
+          displayChargeLines={displayChargeLines}
+          displayChargesTotal={displayChargesTotal}
+          displayPaymentsTotal={displayPaymentsTotal}
+          displayBalance={displayBalance}
+          payments={payments}
+          canOperate={canOperate}
+          isAdmin={isAdmin}
+          showAddCharge={showAddCharge}
+          setShowAddCharge={setShowAddCharge}
+          chargeForm={chargeForm}
+          setChargeForm={setChargeForm}
+          submitCharge={submitCharge}
+          showAddPayment={showAddPayment}
+          setShowAddPayment={setShowAddPayment}
+          paymentForm={paymentForm}
+          setPaymentForm={setPaymentForm}
+          submitPayment={submitPayment}
+          guest={guest}
+        />
+      ) : (
+        <>
+          <ReservationDetailB
+            reservation={reservation}
+            guest={guest}
+            settings={settings}
+            rooms={rooms}
+            assignRooms={assignRooms}
+            setAssignRooms={async (next) => {
+              setAssignRooms(next);
+              try {
+                await updateDoc(doc(db, "reservations", reservation.id), { roomNumbers: next });
+                await createForecastRoomPostings({ ...reservation, roomNumbers: next }, next, guest, rooms, channels);
+                await ensureDepositPosting({ ...reservation, roomNumbers: next }, next);
+                await load();
+              } catch (err) {
+                console.error("setAssignRooms persist error", err);
+              }
+            }}
+            renderAssignmentRow={(i) => {
+              const val = assignRooms[i] || "";
+              const lockType = (Array.isArray(reservation?.roomNumbers) ? reservation.roomNumbers[i] : null) ? rooms.find(r => r.roomNumber === reservation.roomNumbers[i])?.roomType : null;
+              const options = rooms.filter(r => r.status !== "OOO" && r.status !== "Occupied" && (!lockType || r.roomType === lockType));
+              return (
+                <div key={i} style={{ marginBottom: 6 }}>
+                  <select
+                    value={val}
+                    onChange={async (e) => {
+                      const nextVal = e.target.value;
+                      const next = [...assignRooms];
+                      next[i] = nextVal;
+                      setAssignRooms(next);
+                      await updateDoc(doc(db, "reservations", reservation.id), { roomNumbers: next });
+                      await createForecastRoomPostings({ ...reservation, roomNumbers: next }, next, guest, rooms, channels);
+                      await ensureDepositPosting({ ...reservation, roomNumbers: next }, next);
+                      await load();
+                    }}
+                  >
+                    <option value="">Select room</option>
+                    {options.map(r => <option key={r.roomNumber} value={r.roomNumber}>{r.roomNumber} ({r.roomType}) {r.status ? `[${r.status}]` : ""}</option>)}
+                  </select>
+                </div>
+              );
+            }}
+            canOperate={canOperate}
+            canUpgrade={canUpgrade}
+            doCheckIn={doCheckIn}
+            doCheckOut={doCheckOut}
+            printCheckInForm={printCheckInForm}
+            printCheckOutBill={printCheckOutForm}
+            stays={stays}
+            fmt={fmt}
+            isAdmin={isAdmin}
+            navigate={navigate}
+            logReservationChange={async (...args) => { /* preserve stub for children */ }}
+          />
 
-      <ReservationDetailC
-        reservation={reservation}
-        chargeLines={chargeLines}
-        chargesTotal={chargesTotal}
-        payments={payments}
-        paymentsTotal={paymentsTotal}
-        balance={balanceTotal}
-        showAddCharge={showAddCharge}
-        setShowAddCharge={setShowAddCharge}
-        chargeForm={chargeForm}
-        setChargeForm={setChargeForm}
-        submitCharge={submitCharge}
-        showAddPayment={showAddPayment}
-        setShowAddPayment={setShowAddPayment}
-        paymentForm={paymentForm}
-        setPaymentForm={setPaymentForm}
-        submitPayment={submitPayment}
-        printRef={printRef}
-        printMode={printMode}
-        chargePreviewTotal={chargePreviewTotal}
-        paymentPreviewAmount={paymentPreviewAmount}
-        formatCurrencyPreview={formatCurrencyPreview}
-        fmt={(d) => (d ? new Date(d).toLocaleString() : "-")}
-      />
+          <ReservationDetailC
+            printRef={printRef}
+            printMode={printMode}
+            printCheckOutBill={printCheckOutForm}
+            reservation={reservation}
+            settings={settings}
+            fmt={fmt}
+            postings={postings}
+            visiblePostings={visiblePostings}
+            displayChargeLines={displayChargeLines}
+            displayChargesTotal={displayChargesTotal}
+            displayPaymentsTotal={displayPaymentsTotal}
+            displayBalance={displayBalance}
+            payments={payments}
+            canOperate={canOperate}
+            isAdmin={isAdmin}
+            showAddCharge={showAddCharge}
+            setShowAddCharge={setShowAddCharge}
+            chargeForm={chargeForm}
+            setChargeForm={setChargeForm}
+            submitCharge={submitCharge}
+            showAddPayment={showAddPayment}
+            setShowAddPayment={setShowAddPayment}
+            paymentForm={paymentForm}
+            setPaymentForm={setPaymentForm}
+            submitPayment={submitPayment}
+            guest={guest}
+          />
+        </>
+      )}
+      {/* change log */}
+      <div style={{ marginTop: 24 }}>
+        <div style={{ fontWeight: 700, marginBottom: 8 }}>Change Log</div>
+        {logs.length === 0 ? <div style={{ color: "#64748b", fontStyle: "italic" }}>No changes logged yet.</div> : (
+          <ol>
+            {logs.map(l => (
+              <li key={l.id} style={{ marginBottom: 8 }}>
+                <div style={{ fontWeight: 600 }}>{(l.action || "").toString().toUpperCase()}</div>
+                <div style={{ fontSize: 12, color: "#475569" }}>{new Date(l.at || l.createdAt || Date.now()).toLocaleString()}</div>
+              </li>
+            ))}
+          </ol>
+        )}
+      </div>
     </div>
   );
 }
