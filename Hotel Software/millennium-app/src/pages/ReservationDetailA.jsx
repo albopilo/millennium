@@ -216,15 +216,15 @@ async function printCheckOutBill(reservation, actorName, fmtMoney, fmt, displayC
     logAction,
     canOperate,
     printCheckInForm: () => printCheckInForm(reservation, actorName, fmtMoney, fmt),
-  printCheckOutBill: () => printCheckOutBill(
-      reservation,
-      actorName,
-      fmtMoney,
-      fmt,
-      displayChargesTotal,
-      displayPaymentsTotal,
-      displayBalance
-    ),
+printCheckOutBill: () => printCheckOutBill(
+  reservation,
+  actorName,
+  fmtMoney,
+  fmt,
+  totalCharges,
+  totalPayments,
+  balance
+),
   };
 
   return (
