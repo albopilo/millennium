@@ -75,11 +75,9 @@ export default function ReservationDetailB({
               {(assignRooms.length ? assignRooms : [""]).map((_, i) => renderAssignmentRow?.(i))}
             </div>
 
-            {canOperate && (
+{canOperate && (
               <div className="btn-group" style={{ marginTop: 8 }}>
                 <button className="btn btn-primary" onClick={doCheckIn}>Check In</button>
-                {/* Print check-in button hidden when NOT checked-in (we show it only as an affordance here) */}
-                <button className="btn btn-secondary" onClick={printCheckInForm}>Print Form</button>
               </div>
             )}
           </section>
@@ -89,12 +87,27 @@ export default function ReservationDetailB({
           <section className="reservation-section">
             <h3 className="section-title">In-House Guests</h3>
             <p><strong>Active rooms:</strong> {stays.filter(s => s.status === "open").map(s => s.roomNumber).join(", ") || "—"}</p>
-            {canOperate && status === "checked-in" && (
-              <div className="btn-group">
-                <button className="btn btn-primary" onClick={doCheckOut}>Check Out</button>
-                {/* Print Check-out should be available only when status is checked-out, but staff often want to print bill while still checked-in.
-                    According to your requirement: hide print check-out form button when reservation status is still checked in.
-                    So we do not show printCheckOut here (it will be shown only when status === checked-out). */}
+ {canOperate && (
+             <div className="btn-group" style={{ marginTop: 8 }}>
+                {/* Show buttons dynamically based on reservation status */}
+                {status === "checked-in" && (
+                  <>
+                    <button className="btn btn-primary" onClick={doCheckOut}>Check Out</button>
+                    <button
+                      className="btn btn-outline"
+                      onClick={printCheckInForm}>
+                      Print Check-In Form
+                    </button>
+                  </>
+                )}
+
+                {status === "checked-out" && (
+                  <button
+                    className="btn btn-outline"
+                    onClick={printCheckOutBill}>
+                    Print Check-Out Form
+                  </button>
+                )}
               </div>
             )}
           </section>

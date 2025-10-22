@@ -243,10 +243,25 @@ export default function ReservationDetailC({
         )}
 
         {/* printable content (rendered only if we are in print mode) */}
-        {printable && (
-          <div style={{ display: "block" }}>
-            <div ref={printRef} className="printable" dangerouslySetInnerHTML={{ __html: renderTemplateHtml(printMode) }} />
-          </div>
+{/* Printable section for admin print templates */}
+        {printMode && (
+          <div
+            ref={printRef}
+            className="printable"
+            style={{
+              display: "block",
+              background: "#fff",
+              color: "#000",
+             padding: "24px",
+              fontFamily: "Arial, sans-serif",
+              fontSize: "13px",
+              width: "100%",
+              boxSizing: "border-box"
+            }}
+            dangerouslySetInnerHTML={{
+              __html: renderTemplateHtml(printMode)
+            }}
+          />
         )}
       </div>
     </div>

@@ -559,30 +559,31 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
 
   // Print handlers, linked to AdminPrintTemplate stored doc (admin_print_templates/default)
   // We only allow print check-in when reservation is checked-in; print check-out only when checked-out.
-  function printCheckInForm() {
+async function printCheckInForm() {
     if (!reservation) return;
-    if ((reservation.status || "").toLowerCase() !== "checked-in") {
-      alert("Cannot print check-in form until reservation is checked-in.");
+    const status = (reservation.status || "").toLowerCase();
+    if (status !== "checked-in") {
+      alert("Reservation must be checked-in before printing check-in form.");
       return;
     }
+    // ensure print templates are loaded
     setPrintMode("checkin");
-    // allow render then open print dialog
-    setTimeout(() => {
-      window.print();
-      setTimeout(() => setPrintMode(null), 300);
-    }, 100);
+    await new Promise(r => setTimeout(r, 200));
+    window.print();
+    setTimeout(() => setPrintMode(null), 300);
   }
-  function printCheckOutForm() {
+
+  async function printCheckOutForm() {
     if (!reservation) return;
-    if ((reservation.status || "").toLowerCase() !== "checked-out") {
-      alert("Cannot print check-out form until reservation is checked-out.");
+    const status = (reservation.status || "").toLowerCase();
+    if (status !== "checked-out") {
+      alert("Reservation must be checked-out before printing check-out form.");
       return;
     }
     setPrintMode("checkout");
-    setTimeout(() => {
-      window.print();
-      setTimeout(() => setPrintMode(null), 300);
-    }, 100);
+   await new Promise(r => setTimeout(r, 200));
+    window.print();
+    setTimeout(() => setPrintMode(null), 300);
   }
 
   // Derived totals
