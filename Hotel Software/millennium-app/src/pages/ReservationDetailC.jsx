@@ -1,4 +1,3 @@
-// src/pages/ReservationDetailC.jsx
 import React, { useMemo } from "react";
 import "../styles/ReservationDetail.css";
 
