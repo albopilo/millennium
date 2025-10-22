@@ -44,10 +44,12 @@ export default function ReservationDetailC({
   fmt = (d) => (d ? new Date(d).toLocaleString() : "-"),
   guest = null
 }) {
-  const [templates, setTemplates] = useState({
+const [templates, setTemplates] = useState({
     checkInTemplate: { header: "Hotel", body: "<p>Check-in</p>", footer: "" },
     checkOutTemplate: { header: "Hotel", body: "<p>Check-out</p>", footer: "" }
   });
+  // indicate that we've applied templates into state and ready to render/print
+  const [templatesLoaded, setTemplatesLoaded] = useState(false);
 
   // load admin print template (admin_print_templates/default)
   useEffect(() => {
@@ -57,29 +59,40 @@ export default function ReservationDetailC({
         const snap = await getDoc(doc(db, "admin_print_templates", "default"));
         if (snap.exists() && mounted) {
           const data = snap.data();
-setTemplates({
+// apply templates into state and mark as loaded (do not call parent immediately)
+          setTemplates({
             checkInTemplate: data.checkInTemplate || templates.checkInTemplate,
             checkOutTemplate: data.checkOutTemplate || templates.checkOutTemplate
           });
-          // tell parent we're ready to print (if parent provided a callback)
-          try { if (typeof onTemplatesLoaded === "function") onTemplatesLoaded(); } catch (e) { /* noop */ }
+          setTemplatesLoaded(true);
           return;
         }
-        // if no doc, still signal ready so parent can print defaults
-        if (mounted) {
-          try { if (typeof onTemplatesLoaded === "function") onTemplatesLoaded(); } catch (e) { /* noop */ }
-        }
+        // no doc -> keep defaults but mark loaded so parent can proceed
+        if (mounted) setTemplatesLoaded(true);
       } catch (err) {
         console.warn("load templates", err);
-        if (mounted) {
-          try { if (typeof onTemplatesLoaded === "function") onTemplatesLoaded(); } catch (e) { /* noop */ }
-        }
+        if (mounted) setTemplatesLoaded(true);
       }
     }
     loadTpl();
     return () => { mounted = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Only notify parent that templates are ready when:
+  //  - parent requested a printable render (printMode is set) AND
+  //  - templates have actually been applied into component state (templatesLoaded === true)
+  // This avoids the race where parent triggers window.print() before the printable DOM has the updated HTML.
+  useEffect(() => {
+    if (printMode && templatesLoaded) {
+      try {
+        if (typeof onTemplatesLoaded === "function") onTemplatesLoaded();
+      } catch (e) { /* noop */ }
+    }
+    // do not include onTemplatesLoaded in deps (it's a function prop), but this effect intentionally
+    // reacts to changes in printMode + templatesLoaded which are the important triggers.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [printMode, templatesLoaded]);
 
   // helpers
   const fmtIdr = (n) => `IDR ${Number(n || 0).toLocaleString("id-ID")}`;
