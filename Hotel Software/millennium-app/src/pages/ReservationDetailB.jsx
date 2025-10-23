@@ -51,6 +51,9 @@ export default function ReservationDetailB({
       <div className="card-header">
         <h2>Reservation Detail</h2>
         <div className="header-actions">
+                  {reservation.status === "booked" && canOperate && (
+  <button onClick={doNoShow} className="btn btn-warning">Mark No Show</button>
+)}
 {/* Removed navigation-based edit to prevent blank page */}
           {isAdmin && (
             <div style={{ display: "flex", gap: 8 }}>
@@ -136,10 +139,6 @@ export default function ReservationDetailB({
             </div>
           </section>
         )}
-
-        {reservation.status === "booked" && canOperate && (
-  <button onClick={doNoShow} className="btn btn-warning">Mark No Show</button>
-)}
 
         {canUpgrade && (
           <section className="reservation-section">
