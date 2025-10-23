@@ -862,7 +862,7 @@ const fmt = (raw) => {
             logReservationChange={logReservationChange}
           />
 
-        {/* --- Folio & Payments Section --- */}
+        // --- Folio & Payments Section ---
     <div style={{
       marginTop: 20,
       background: "#fff",
