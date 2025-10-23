@@ -580,7 +580,12 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
             createdBy: actorName
           });
           stayMap[roomNumber] = stayRef.id;
-          tx.update(doc(db, "rooms", roomNumber), { status: "Occupied" });
+          // Note: assumes 'roomNumber' is Firestore docId; adjust if not
+          try {
+            tx.update(doc(db, "rooms", roomNumber), { status: "Occupied" });
+          } catch (err) {
+            console.warn("Room status update failed; check your docId mapping", roomNumber, err);
+          }
         }
         tx.update(resRef, { status: "checked-in", checkedInAt: new Date(), roomNumbers: assignRooms });
       });
@@ -729,24 +734,30 @@ const fmt = (raw) => {
   return dateObj.toLocaleString();
 };
 
-      {/* Change logging for transactions and operations */}
-      {/* Call logReservationChange after user actions */}
-     useEffect(() => {
-        if (!reservation) return;
-        if (payments.length > 0) {
-          logReservationChange("payment_added", {
-            latestPayment: payments[payments.length - 1],
-          });
-       }
-      }, [payments]);
+      // --- Change logging hooks ---
+  useEffect(() => {
+    if (!reservation || payments.length === 0) return;
+    const last = payments[payments.length - 1];
+    // Prevent duplicate log when reloading (optional improvement)
+    if (!last || !last.amount) return;
+    logReservationChange("payment_added", {
+      method: last.method || "unknown",
+      amount: last.amount || 0,
+      refNo: last.refNo || "",
+      capturedAt: last.capturedAt || new Date(),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [payments.length]);
 
-      useEffect(() => {
-        if (!reservation) return;
-        if (reservation.status === "checked-in") logReservationChange("check_in", {});
-        if (reservation.status === "checked-out") logReservationChange("check_out", {});
-      }, [reservation?.status]);
+  useEffect(() => {
+    if (!reservation) return;
+    const st = (reservation.status || "").toLowerCase();
+    if (st === "checked-in") logReservationChange("check_in", {});
+    if (st === "checked-out") logReservationChange("check_out", {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reservation?.status]);
 
-      {/* Remove duplicated folio component */}
+// Remove duplicated folio component
 
   if (loading || !reservation) {
     return <div style={{ padding: 20 }}>Loading reservation…</div>;
@@ -851,23 +862,107 @@ const fmt = (raw) => {
             logReservationChange={logReservationChange}
           />
 
-           )}
+        {/* --- Folio & Payments Section --- */}
+    <div style={{
+      marginTop: 20,
+      background: "#fff",
+      borderRadius: 8,
+      boxShadow: "0 1px 3px rgba(0,0,0,0.1)",
+      padding: 16
+    }}>
+      <h3 style={{ marginBottom: 8 }}>Folio & Payments</h3>
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+        <div><b>Charges</b>: {fmtIdr(displayChargesTotal)}</div>
+        <div><b>Payments</b>: {fmtIdr(displayPaymentsTotal)}</div>
+        <div><b>Balance</b>: {fmtIdr(displayBalance)}</div>
+      </div>
+
+      <div style={{ marginTop: 8 }}>
+        <h4 style={{ marginBottom: 4 }}>Itemized Charges</h4>
+        {displayChargeLines.length === 0 ? (
+          <div style={{ color: "#6b7280" }}>No charges</div>
+        ) : (
+          <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+            {displayChargeLines.map((p) => (
+              <li key={p.id} style={{
+                borderBottom: "1px solid #e5e7eb",
+                padding: "6px 0",
+                display: "flex",
+                justifyContent: "space-between"
+              }}>
+                <span>{p.description}</span>
+                <span>{fmtIdr(p.amount)}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <div style={{ marginTop: 12 }}>
+        <h4 style={{ marginBottom: 4 }}>Payments</h4>
+        {payments.length === 0 ? (
+          <div style={{ color: "#6b7280" }}>No payments</div>
+        ) : (
+          <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+            {payments.map((p) => (
+              <li key={p.id} style={{
+                borderBottom: "1px solid #e5e7eb",
+                padding: "6px 0",
+                display: "flex",
+                justifyContent: "space-between"
+              }}>
+                <span>{p.method} {p.refNo && <span style={{ color: "#6b7280" }}>({p.refNo})</span>}</span>
+                <span>{fmtIdr(p.amount)}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
+        <button className="btn btn-primary" onClick={() => setShowAddCharge(true)}>Add Charge</button>
+        <button className="btn btn-primary" onClick={() => setShowAddPayment(true)}>Add Payment</button>
+      </div>
+    </div>
+  )}
 
 
       {/* change log */}
-      <div style={{ marginTop: 24 }}>
-        <div style={{ fontWeight: 700, marginBottom: 8 }}>Change Log</div>
-        {logs.length === 0 ? <div style={{ color: "#64748b", fontStyle: "italic" }}>No changes logged yet.</div> : (
-          <ol>
-            {logs.map(l => (
-              <li key={l.id} style={{ marginBottom: 8 }}>
-                <div style={{ fontWeight: 600 }}>{(l.action || "").toString().toUpperCase()}</div>
-                <div style={{ fontSize: 12, color: "#475569" }}>{new Date(l.at || l.createdAt || Date.now()).toLocaleString()}</div>
-              </li>
-            ))}
-          </ol>
-        )}
-      </div>
+      <div style={{
+   marginTop: 24,
+   background: "#f9fafb",
+   padding: 16,
+   borderRadius: 8,
+   border: "1px solid #e5e7eb"
+ }}>
+   <h3 style={{ marginBottom: 8 }}>Change Log</h3>
+   {logs.length === 0 ? (
+     <div style={{ color: "#9ca3af", fontStyle: "italic" }}>No changes logged yet.</div>
+   ) : (
+     <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+       {logs.map((l) => {
+         const d = l.createdAt?.toDate ? l.createdAt.toDate() : new Date(l.createdAt || Date.now());
+         const detail = l.details?.latestPayment
+          ? `Payment ${fmtIdr(l.details.latestPayment.amount)} via ${l.details.latestPayment.method || "unknown"}`
+           : (l.details?.amount
+              ? `Payment ${fmtIdr(l.details.amount)} via ${l.details.method || "unknown"}`
+              : JSON.stringify(l.details || {}));
+         return (
+           <li key={l.id} style={{
+             borderBottom: "1px solid #e5e7eb",
+             padding: "8px 0"
+           }}>
+             <div style={{ fontWeight: 600 }}>{(l.action || "").toUpperCase()}</div>
+             <div style={{ fontSize: 12, color: "#6b7280" }}>{d.toLocaleString()}</div>
+             {detail && (
+               <div style={{ fontSize: 13, color: "#374151" }}>{detail}</div>
+             )}
+           </li>
+         );
+       })}
+     </ul>
+   )}
+ </div>
     </div>
   );
 }
