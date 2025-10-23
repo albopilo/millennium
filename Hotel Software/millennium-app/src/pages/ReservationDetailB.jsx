@@ -34,6 +34,8 @@ export default function ReservationDetailB({
   doUpgradePreCheckIn,
   doUpgradeRoom,
   stays = [],
+  doNoShow,
+  handleEditReservation,
   handleDeleteReservation,
   navigate,
   isAdmin,
