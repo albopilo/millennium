@@ -327,45 +327,45 @@ export default function FrontDeskCheckIn({ permissions = [] }) {
 
       {/* Arrivals table (kept columns & structure) */}
       {hasArrivals && (
-        <table className="reservations-table" style={{ marginTop: 8 }}>
+        <table className="reservations-table modern-table">
           <thead>
             <tr>
-              <th>Res No</th>
+              <th>Reservation</th>
               <th>Guest</th>
               <th>Rooms</th>
-              <th>Check-In</th>
-              <th>Check-Out</th>
-              <th>Adults</th>
-              <th>Children</th>
-              <th>Action</th>
+              <th>Stay Period</th>
+              <th>Occupancy</th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody>
-            {arrivals.map((r) => {
-              const roomList = Array.isArray(r.roomNumbers) ? r.roomNumbers : [r.roomNumber];
-              return (
-                <tr key={r.id}>
-                  <td>{r.resNo || r.id}</td>
-                  <td>{r.guestName || "-"}</td>
-                  <td>
-                    {roomList.filter(Boolean).map((n) => (
-                      <span key={n} style={{ marginRight: 8 }}>{roomBadge(n)}</span>
+            {arrivals.map((r, i) => (
+              <tr key={r.id} className={i % 2 === 0 ? "row-even" : "row-odd"}>
+                <td><strong>{r.resNo || r.id}</strong></td>
+                <td>{r.guestName || "-"}</td>
+                <td>
+                  {(Array.isArray(r.roomNumbers) ? r.roomNumbers : [r.roomNumber])
+                    .filter(Boolean)
+                    .map((n) => (
+                      <span key={n} className="badge-room">{roomBadge(n)}</span>
                     ))}
-                  </td>
-                  <td>{fmt(r.checkInDate)}</td>
-                  <td>{fmt(r.checkOutDate)}</td>
-                  <td>{r.adults ?? "-"}</td>
-                  <td>{r.children ?? "-"}</td>
-                  <td>
-                    {can("canViewReservations") && (
-                      <Link className="btn btn-primary" to={`/reservations/${r.id}`}>
-                        See Details
-                      </Link>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
+                </td>
+                <td>
+                  <div>{fmt(r.checkInDate)}</div>
+                  <div style={{ fontSize: "12px", color: "#64748b" }}>
+                    → {fmt(r.checkOutDate)}
+                  </div>
+                </td>
+                <td>{r.adults ?? 0}A / {r.children ?? 0}C</td>
+                <td>
+                  {can("canViewReservations") && (
+                    <Link className="btn btn-sm btn-primary" to={`/reservations/${r.id}`}>
+                      View
+                    </Link>
+                  )}
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
       )}

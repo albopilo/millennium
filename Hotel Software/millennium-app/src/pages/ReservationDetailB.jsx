@@ -51,10 +51,15 @@ export default function ReservationDetailB({
       <div className="card-header">
         <h2>Reservation Detail</h2>
         <div className="header-actions">
+{/* Removed navigation-based edit to prevent blank page */}
           {isAdmin && (
             <div style={{ display: "flex", gap: 8 }}>
-              <button className="btn btn-primary" onClick={() => navigate(`/reservations/${reservation.id}/edit`)}>Edit</button>
-              <button className="btn btn-danger" onClick={() => handleDeleteReservation && handleDeleteReservation()}>Delete</button>
+              <button className="btn btn-secondary" onClick={() => handleEditReservation && handleEditReservation()}>
+                Edit
+              </button>
+              <button className="btn btn-danger" onClick={() => handleDeleteReservation && handleDeleteReservation()}>
+                Delete
+              </button>
             </div>
           )}
         </div>
@@ -135,14 +140,6 @@ export default function ReservationDetailB({
         {reservation.status === "booked" && canOperate && (
   <button onClick={doNoShow} className="btn btn-warning">Mark No Show</button>
 )}
-
-{canOperate && (
-  <>
-    <button onClick={() => handleEditReservation()} className="btn btn-secondary">Edit</button>
-    <button onClick={handleDeleteReservation} className="btn btn-danger">Delete</button>
-  </>
-)}
-
 
         {canUpgrade && (
           <section className="reservation-section">

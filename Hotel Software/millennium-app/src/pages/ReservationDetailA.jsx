@@ -729,6 +729,24 @@ const fmt = (raw) => {
   return dateObj.toLocaleString();
 };
 
+      {/* Change logging for transactions and operations */}
+      {/* Call logReservationChange after user actions */}
+     useEffect(() => {
+        if (!reservation) return;
+        if (payments.length > 0) {
+          logReservationChange("payment_added", {
+            latestPayment: payments[payments.length - 1],
+          });
+       }
+      }, [payments]);
+
+      useEffect(() => {
+        if (!reservation) return;
+        if (reservation.status === "checked-in") logReservationChange("check_in", {});
+        if (reservation.status === "checked-out") logReservationChange("check_out", {});
+      }, [reservation?.status]);
+
+      {/* Remove duplicated folio component */}
 
   if (loading || !reservation) {
     return <div style={{ padding: 20 }}>Loading reservation…</div>;
@@ -736,8 +754,8 @@ const fmt = (raw) => {
 
   return (
     <div>
-      {/* When printMode is set we render ReservationDetailC alone (the printable content) */}
-      {printMode ? (
+      {/* Only render printable version when printMode is active */}
+      {printMode && (
         <ReservationDetailC
           printRef={printRef}
           printMode={printMode}
@@ -771,9 +789,11 @@ const fmt = (raw) => {
           submitPayment={submitPayment}
           guest={guest}
         />
-      ) : (
-        <>
-          <ReservationDetailB
+       )}
+
+      {/* When NOT printing, show normal layout */}
+      {!printMode && (
+        <ReservationDetailB
             reservation={reservation}
             guest={guest}
             settings={settings}
@@ -831,36 +851,9 @@ const fmt = (raw) => {
             logReservationChange={logReservationChange}
           />
 
-          <ReservationDetailC
-            printRef={printRef}
-            printMode={printMode}
-            printCheckOutBill={printCheckOutForm}
-            reservation={reservation}
-            settings={settings}
-            fmt={fmt}
-            postings={postings}
-            visiblePostings={visiblePostings}
-            displayChargeLines={displayChargeLines}
-            displayChargesTotal={displayChargesTotal}
-            displayPaymentsTotal={displayPaymentsTotal}
-            displayBalance={displayBalance}
-            payments={payments}
-            canOperate={canOperate}
-            isAdmin={isAdmin}
-            showAddCharge={showAddCharge}
-            setShowAddCharge={setShowAddCharge}
-            chargeForm={chargeForm}
-            setChargeForm={setChargeForm}
-            submitCharge={submitCharge}
-            showAddPayment={showAddPayment}
-            setShowAddPayment={setShowAddPayment}
-            paymentForm={paymentForm}
-            setPaymentForm={setPaymentForm}
-            submitPayment={submitPayment}
-            guest={guest}
-          />
-        </>
-      )}
+           )}
+
+
       {/* change log */}
       <div style={{ marginTop: 24 }}>
         <div style={{ fontWeight: 700, marginBottom: 8 }}>Change Log</div>
