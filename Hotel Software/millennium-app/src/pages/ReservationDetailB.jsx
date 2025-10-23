@@ -130,6 +130,18 @@ export default function ReservationDetailB({
           </section>
         )}
 
+        {reservation.status === "booked" && canOperate && (
+  <button onClick={doNoShow} className="btn btn-warning">Mark No Show</button>
+)}
+
+{canOperate && (
+  <>
+    <button onClick={() => handleEditReservation()} className="btn btn-secondary">Edit</button>
+    <button onClick={handleDeleteReservation} className="btn btn-danger">Delete</button>
+  </>
+)}
+
+
         {canUpgrade && (
           <section className="reservation-section">
             <h3 className="section-title">Upgrades</h3>

@@ -479,6 +479,79 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
     }
   };
 
+    // --- Log reservation change ---
+  async function logReservationChange(action, details = {}) {
+    if (!reservation?.id) return;
+    try {
+      const collRef = collection(doc(db, "reservations", reservation.id), "logs");
+      await addDoc(collRef, {
+        action,
+        details,
+        createdAt: new Date(),
+        createdBy: actorName,
+      });
+    } catch (err) {
+      console.error("Failed to log reservation change", action, err);
+    }
+  }
+
+  // --- Edit reservation (basic example) ---
+  async function handleEditReservation(updates = {}) {
+    if (!reservation?.id) return;
+    const newData = { ...updates, updatedAt: new Date(), updatedBy: actorName };
+    try {
+      await updateDoc(doc(db, "reservations", reservation.id), newData);
+      await logReservationChange("edit", { updates: newData });
+      alert("Reservation updated");
+      await load();
+    } catch (err) {
+      console.error("Edit failed", err);
+      alert("Failed to edit reservation");
+    }
+  }
+
+  // --- Delete reservation ---
+  async function handleDeleteReservation() {
+    if (!reservation?.id) return;
+    if (!window.confirm("Delete this reservation? This cannot be undone.")) return;
+    try {
+      await updateDoc(doc(db, "reservations", reservation.id), {
+        status: "deleted",
+        deletedAt: new Date(),
+        deletedBy: actorName,
+      });
+      await logReservationChange("delete", { reason: "manual delete" });
+      alert("Reservation deleted");
+      navigate("/calendar");
+    } catch (err) {
+      console.error("Delete failed", err);
+      alert("Failed to delete reservation");
+    }
+  }
+
+  // --- No Show handler ---
+  async function doNoShow() {
+    if (!reservation?.id) return;
+    if ((reservation.status || "").toLowerCase() !== "booked") {
+      alert("Only booked reservations can be marked as No Show");
+      return;
+    }
+    if (!window.confirm("Mark this reservation as No Show?")) return;
+    try {
+      await updateDoc(doc(db, "reservations", reservation.id), {
+        status: "no-show",
+        noShowAt: new Date(),
+        updatedBy: actorName,
+      });
+      await logReservationChange("no-show", { previousStatus: reservation.status });
+      alert("Marked as No Show");
+      await load();
+    } catch (err) {
+      console.error("No show failed", err);
+      alert("Failed to mark as No Show");
+    }
+  }
+
   // Check-in flow
   const doCheckIn = async () => {
     if (!reservation) return;
@@ -752,7 +825,10 @@ const fmt = (raw) => {
             fmt={fmt}
             isAdmin={isAdmin}
             navigate={navigate}
-            logReservationChange={async (...args) => { /* preserve stub for children */ }}
+            doNoShow={doNoShow}
+            handleEditReservation={handleEditReservation}
+            handleDeleteReservation={handleDeleteReservation}
+            logReservationChange={logReservationChange}
           />
 
           <ReservationDetailC
