@@ -48,7 +48,6 @@ function useMountLogger(label, extra = {}) {
  const setUpgradePreRoom = () => {};
  const doUpgradePreCheckIn = () => {};
  const doUpgradeRoom = () => {};
- const printCheckOutBill = printCheckOutForm; // alias for legacy prop
 
 /**
  * ReservationDetailA (rewritten)
@@ -776,6 +775,9 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
       printReadyResolverRef.current = null;
     }
   }
+
+  // --- legacy alias (used by ReservationDetailB)
+  const printCheckOutBill = printCheckOutForm;
 
   // -----------------------
   // Derived totals
