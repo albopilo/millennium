@@ -85,3 +85,10 @@
   border-radius: 4px;
   margin-right: 4px;
 }
+.log-entry.card {
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  transition: background 0.2s ease;
+}
+.log-entry.card:hover {
+  background: #f1f5f9;
+}
