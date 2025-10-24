@@ -868,22 +868,22 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
     );
   }
 
-  const grouped = logs.reduce((acc, log) => {
-    const dateObj = log.createdAt?.toDate ? log.createdAt.toDate() : parseToDate(log.createdAt) || new Date();
-    const key = dateObj.toISOString().slice(0, 10);
-    acc[key] = acc[key] || [];
-    acc[key].push({ ...log, _dateObj: dateObj });
+  const grouped = logs.reduce((acc, entry) => {
+    const d = entry.createdAt?.toDate ? entry.createdAt.toDate() : parseToDate(entry.createdAt) || new Date();
+    const dayKey = d.toISOString().slice(0, 10);
+    if (!acc[dayKey]) acc[dayKey] = [];
+    acc[dayKey].push({ ...entry, _dateObj: d });
     return acc;
   }, {});
 
   const badgeFor = (action) => {
-    const a = action?.toLowerCase() || "";
+    const a = (action || "").toLowerCase();
     if (a.includes("payment")) return "payment";
     if (a.includes("check_in")) return "checkin";
     if (a.includes("check_out")) return "checkout";
-    if (a.includes("no-show")) return "noshow";
-    if (a.includes("delete")) return "delete";
+    if (a.includes("no‐show")) return "noshow";
     if (a.includes("edit")) return "edit";
+    if (a.includes("delete")) return "delete";
     return "";
   };
 
@@ -896,33 +896,29 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
           <div key={day}>
             <div className="change-log-day">
               {new Date(day).toLocaleDateString(undefined, {
-                weekday: "short",
-                month: "short",
-                day: "numeric",
-                year: "numeric",
+                weekday: "short", month: "short", day: "numeric", year: "numeric"
               })}
             </div>
 
             {entries.map((entry) => {
-              const time = entry._dateObj.toLocaleTimeString([], {
-                hour: "2-digit",
-                minute: "2-digit",
-              });
-              const badge = badgeFor(entry.action);
+              const time = entry._dateObj.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
               const actionLabel = (entry.action || "").replace(/_/g, " ").toUpperCase();
+              const badge = badgeFor(entry.action);
 
+              // build summary
               let summary = "";
               if (entry.details) {
-                if (entry.details.amount && entry.details.method)
+                if (entry.details.amount && entry.details.method) {
                   summary = `Payment ${fmtIdr(entry.details.amount)} via ${entry.details.method}`;
-                else if (entry.details.updates)
-                  summary = Object.entries(entry.details.updates)
-                    .map(([k, v]) => `${k}: ${v}`)
-                    .join(", ");
-                else
+                } else if (entry.details.before !== undefined || entry.details.after !== undefined) {
+                  summary = `Changed ${Object.keys(entry.details).map(k =>
+                    `${k}: ${entry.details.before} → ${entry.details.after}`
+                  ).join(", ")}`;
+                } else {
                   summary = Object.entries(entry.details)
-                    .map(([k, v]) => `${k}: ${String(v)}`)
+                    .map(([k,v]) => `${k}: ${String(v)}`)
                     .join(", ");
+                }
               }
 
               return (
@@ -931,6 +927,7 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
                     <div className="log-action">
                       {badge && <span className={`log-badge ${badge}`}>{actionLabel}</span>}
                       {!badge && actionLabel}
+                      {entry.createdBy && ` • by ${entry.createdBy}`}
                     </div>
                     {summary && <div className="log-summary">{summary}</div>}
                   </div>
