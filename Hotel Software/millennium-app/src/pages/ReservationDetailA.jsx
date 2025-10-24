@@ -915,8 +915,6 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
                 const badge = badgeFor(entry.action);
 
                 // ---- Build summary ----
-                let summary = "";
-                // --- Build summary ---
 let summary = "";
 const details = entry.details || entry.latestPayment || {};
 
