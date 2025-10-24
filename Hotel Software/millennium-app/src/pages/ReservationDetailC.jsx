@@ -4,6 +4,14 @@ import "../styles/ReservationDetail.css";
 import { doc, getDoc } from "firebase/firestore";
 import { db } from "../firebase";
 
+// --- Diagnostic mount logger ---
+function useMountLogger(label, extra = {}) {
+  React.useEffect(() => {
+    console.log(`[MOUNT] ${label}`, extra);
+    return () => console.log(`[UNMOUNT] ${label}`, extra);
+  }, [label]);
+}
+
 /**
  * Presentational folio & payments component.
  * - Shows itemized charges, payments, totals
@@ -44,6 +52,8 @@ export default function ReservationDetailC({
   fmt = (d) => (d ? new Date(d).toLocaleString() : "-"),
   guest = null
 }) {
+  useMountLogger("ReservationDetailC");
+  
 const [templates, setTemplates] = useState({
     checkInTemplate: { header: "Hotel", body: "<p>Check-in</p>", footer: "" },
     checkOutTemplate: { header: "Hotel", body: "<p>Check-out</p>", footer: "" }

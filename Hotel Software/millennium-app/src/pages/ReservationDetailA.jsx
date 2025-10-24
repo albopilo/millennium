@@ -19,6 +19,14 @@ import { db } from "../firebase";
 import ReservationDetailB from "./ReservationDetailB";
 import ReservationDetailC from "./ReservationDetailC";
 
+// --- Diagnostic mount logger ---
+function useMountLogger(label, extra = {}) {
+  React.useEffect(() => {
+    console.log(`[MOUNT] ${label}`, extra);
+    return () => console.log(`[UNMOUNT] ${label}`, extra);
+  }, [label]);
+}
+
 /**
  * ReservationDetailA (rewritten)
  *
@@ -33,6 +41,9 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
   const { id } = useParams();
   const navigate = useNavigate();
   const actorName = currentUser?.displayName || currentUser?.email || "frontdesk";
+
+  // diagnostic
+  useMountLogger("ReservationDetailA", { id });
 
   // -----------------------
   // Permissions helpers
@@ -827,30 +838,70 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
 
   function LogCard() {
     return (
-      <Card title="Change Log" style={{ marginTop: 8 }}>
+      <Card title="Change Log" style={{ marginTop: 16 }}>
         {logs.length === 0 ? (
           <div style={{ color: "#9ca3af", fontStyle: "italic" }}>No changes logged yet.</div>
         ) : (
-          <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             {logs.map((l) => {
               const d = l.createdAt?.toDate ? l.createdAt.toDate() : parseToDate(l.createdAt) || new Date();
-              const detailsPretty = (() => {
-                if (!l.details) return "";
-                // attempt a nicer formatting for payments
+              const prettyDate = d.toLocaleString();
+              let detailText = "";
+
+              if (l.details) {
                 if (l.details.amount && l.details.method) {
-                  return `Payment ${fmtIdr(l.details.amount)} via ${l.details.method}`;
+                  detailText = `Payment ${fmtIdr(l.details.amount)} via ${l.details.method}`;
+                } else if (l.details.updates) {
+                  detailText = Object.entries(l.details.updates)
+                    .map(([k, v]) => `${k}: ${v}`)
+                    .join(", ");
+                } else if (typeof l.details === "string") {
+                  detailText = l.details;
+                } else {
+                  try {
+                    detailText = JSON.stringify(l.details, null, 2);
+                  } catch {
+                    detailText = String(l.details);
+                  }
                 }
-                return JSON.stringify(l.details);
-              })();
+              }
+
               return (
-                <li key={l.id} style={{ padding: "8px 0", borderBottom: "1px solid #eee" }}>
-                  <div style={{ fontWeight: 700 }}>{(l.action || "").toUpperCase()}</div>
-                  <div style={{ color: "#6b7280", fontSize: 12 }}>{d.toLocaleString()}</div>
-                  {detailsPretty && <div style={{ marginTop: 6 }}>{detailsPretty}</div>}
-                </li>
+                <div
+                  key={l.id}
+                  style={{
+                    background: "#f9fafb",
+                    border: "1px solid #e5e7eb",
+                    borderRadius: 6,
+                    padding: "8px 12px",
+                    fontSize: 14
+                  }}
+                >
+                  <div style={{ fontWeight: 600, color: "#111827" }}>
+                    {(l.action || "").toUpperCase()}
+                  </div>
+                  <div style={{ color: "#6b7280", fontSize: 12 }}>{prettyDate}</div>
+                  {detailText && (
+                    <div
+                      style={{
+                        marginTop: 6,
+                        background: "#fff",
+                        borderRadius: 4,
+                        padding: "6px 8px",
+                        fontFamily: "monospace",
+                        whiteSpace: "pre-wrap",
+                        fontSize: 12,
+                        color: "#374151",
+                        overflowWrap: "anywhere"
+                      }}
+                    >
+                      {detailText}
+                    </div>
+                  )}
+                </div>
               );
             })}
-          </ul>
+          </div>
         )}
       </Card>
     );
@@ -945,43 +996,46 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
     <div style={{ padding: 16 }}>
       {/* printable render */}
       {printMode && (
-        <ReservationDetailC
-          printRef={printRef}
-          printMode={printMode}
-          onTemplatesLoaded={() => {
-            if (printReadyResolverRef.current) {
-              try { printReadyResolverRef.current(); } catch (e) { /* noop */ }
-            }
-          }}
-          reservation={reservation}
-          settings={settings}
-          fmt={fmt}
-          postings={postings}
-          visiblePostings={visiblePostings}
-          displayChargeLines={displayChargeLines}
-          displayChargesTotal={displayChargesTotal}
-          displayPaymentsTotal={displayPaymentsTotal}
-          displayBalance={displayBalance}
-          payments={payments}
-          canOperate={canOperate}
-          isAdmin={isAdmin}
-          showAddCharge={showAddCharge}
-          setShowAddCharge={setShowAddCharge}
-          chargeForm={chargeForm}
-          setChargeForm={setChargeForm}
-          submitCharge={submitCharge}
-          showAddPayment={showAddPayment}
-          setShowAddPayment={setShowAddPayment}
-          paymentForm={paymentForm}
-          setPaymentForm={setPaymentForm}
-          submitPayment={submitPayment}
-          guest={guest}
-        />
+        <>
+          {useMountLogger("ReservationDetailC", { printMode })}
+          <ReservationDetailC
+            printRef={printRef}
+            printMode={printMode}
+            onTemplatesLoaded={() => {
+              if (printReadyResolverRef.current) {
+                try { printReadyResolverRef.current(); } catch (e) { /* noop */ }
+              }
+            }}
+            reservation={reservation}
+            settings={settings}
+            fmt={fmt}
+            postings={postings}
+            visiblePostings={visiblePostings}
+            displayChargeLines={displayChargeLines}
+            displayChargesTotal={displayChargesTotal}
+            displayPaymentsTotal={displayPaymentsTotal}
+            displayBalance={displayBalance}
+            payments={payments}
+            canOperate={canOperate}
+            isAdmin={isAdmin}
+            showAddCharge={showAddCharge}
+            setShowAddCharge={setShowAddCharge}
+            chargeForm={chargeForm}
+            setChargeForm={setChargeForm}
+            submitCharge={submitCharge}
+            showAddPayment={showAddPayment}
+            setShowAddPayment={setShowAddPayment}
+            paymentForm={paymentForm}
+            setPaymentForm={setPaymentForm}
+            submitPayment={submitPayment}
+            guest={guest}
+          />
+        </>
       )}
 
-      {/* normal layout */}
       {!printMode && (
         <>
+          {useMountLogger("ReservationDetailB + FolioCard", { printMode })}
           <ReservationDetailB
             reservation={reservation}
             guest={guest}

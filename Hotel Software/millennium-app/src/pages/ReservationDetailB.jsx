@@ -2,6 +2,15 @@
 import React from "react";
 import "../styles/ReservationDetail.css";
 
+// --- Diagnostic mount logger ---
+function useMountLogger(label, extra = {}) {
+  React.useEffect(() => {
+    console.log(`[MOUNT] ${label}`, extra);
+    return () => console.log(`[UNMOUNT] ${label}`, extra);
+  }, [label]);
+}
+
+
 export default function ReservationDetailB({
   reservation,
   guest,
@@ -43,6 +52,8 @@ export default function ReservationDetailB({
   logReservationChange
 }) {
   if (!reservation) return <div className="p-4">Loading reservation...</div>;
+
+  useMountLogger("ReservationDetailB");
 
   const status = (reservation.status || "").toLowerCase();
 
