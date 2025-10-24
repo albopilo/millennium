@@ -857,90 +857,107 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
   }
 
   function LogCard() {
-  if (logs.length === 0) {
+    if (logs.length === 0) {
+      return (
+        <div className="change-log-section">
+          <div className="change-log-card">
+            <div className="change-log-header">Change Log</div>
+            <div className="log-empty">No changes logged yet.</div>
+          </div>
+        </div>
+      );
+    }
+
+    const grouped = logs.reduce((acc, entry) => {
+      const d = entry.createdAt?.toDate ? entry.createdAt.toDate() : parseToDate(entry.createdAt) || new Date();
+      const dayKey = d.toISOString().slice(0, 10);
+      if (!acc[dayKey]) acc[dayKey] = [];
+      acc[dayKey].push({ ...entry, _dateObj: d });
+      return acc;
+    }, {});
+
+    const badgeFor = (action) => {
+      const a = (action || "").toLowerCase();
+      if (a.includes("payment")) return "payment";
+      if (a.includes("check_in")) return "checkin";
+      if (a.includes("check_out")) return "checkout";
+      if (a.includes("no-show") || a.includes("noshow")) return "noshow";
+      if (a.includes("edit")) return "edit";
+      if (a.includes("delete")) return "delete";
+      return "";
+    };
+
+    const labelMap = {
+      payment_added: "Payment Added",
+      check_in: "Check In",
+      check_out: "Check Out",
+      no_show: "No Show",
+      edit: "Edited",
+      delete: "Deleted",
+    };
+
     return (
       <div className="change-log-section">
         <div className="change-log-card">
           <div className="change-log-header">Change Log</div>
-          <div className="log-empty">No changes logged yet.</div>
+
+          {Object.entries(grouped).map(([day, entries]) => (
+            <div key={day}>
+              <div className="change-log-day">
+                {new Date(day).toLocaleDateString(undefined, {
+                  weekday: "short", month: "short", day: "numeric", year: "numeric"
+                })}
+              </div>
+
+              {entries.map((entry) => {
+                const time = entry._dateObj.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+                const actionLabel = labelMap[entry.action] || (entry.action || "").replace(/_/g, " ").toUpperCase();
+                const badge = badgeFor(entry.action);
+
+                // ---- Build summary ----
+                let summary = "";
+                if (entry.details) {
+                  // Payment details
+                  if (entry.action?.toLowerCase().includes("payment") && entry.details.amount && entry.details.method) {
+                    summary = `Amount: ${fmtIdr(entry.details.amount)} • Method: ${entry.details.method}`;
+                    if (entry.details.refNo) summary = ` • Ref: ${entry.details.refNo}`;
+                  }
+                  // Status change (before/after)
+                  else if (entry.details.before !== undefined || entry.details.after !== undefined) {
+                    summary = Object.entries(entry.details)
+                      .map(([k, v]) => `${k}: ${v}`)
+                      .join(", ");
+                  }
+                  // Generic key-value summary
+                  else if (typeof entry.details === "object") {
+                    summary = Object.entries(entry.details)
+                      .map(([k, v]) => `${k}: ${String(v)}`)
+                      .join(", ");
+                  } else if (typeof entry.details === "string") {
+                    summary = entry.details;
+                  }
+                }
+
+                return (
+                  <div key={entry.id} className={`log-entry card ${badge ? `log-${badge}` : ""}`}>
+                    <div className="log-main">
+                      <div className="log-action">
+                        {badge && <span className={`log-badge ${badge}`}>{actionLabel}</span>}
+                        {!badge && <strong>{actionLabel}</strong>}
+                        {entry.createdBy && <span className="log-by"> • by {entry.createdBy}</span>}
+                      </div>
+                      {summary && <div className="log-summary">{summary}</div>}
+                    </div>
+                    <div className="log-meta">{time}</div>
+                  </div>
+                );
+              })}
+            </div>
+          ))}
         </div>
       </div>
     );
   }
-
-  const grouped = logs.reduce((acc, entry) => {
-    const d = entry.createdAt?.toDate ? entry.createdAt.toDate() : parseToDate(entry.createdAt) || new Date();
-    const dayKey = d.toISOString().slice(0, 10);
-    if (!acc[dayKey]) acc[dayKey] = [];
-    acc[dayKey].push({ ...entry, _dateObj: d });
-    return acc;
-  }, {});
-
-  const badgeFor = (action) => {
-    const a = (action || "").toLowerCase();
-    if (a.includes("payment")) return "payment";
-    if (a.includes("check_in")) return "checkin";
-    if (a.includes("check_out")) return "checkout";
-    if (a.includes("no‐show")) return "noshow";
-    if (a.includes("edit")) return "edit";
-    if (a.includes("delete")) return "delete";
-    return "";
-  };
-
-  return (
-    <div className="change-log-section">
-      <div className="change-log-card">
-        <div className="change-log-header">Change Log</div>
-
-        {Object.entries(grouped).map(([day, entries]) => (
-          <div key={day}>
-            <div className="change-log-day">
-              {new Date(day).toLocaleDateString(undefined, {
-                weekday: "short", month: "short", day: "numeric", year: "numeric"
-              })}
-            </div>
-
-            {entries.map((entry) => {
-              const time = entry._dateObj.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-              const actionLabel = (entry.action || "").replace(/_/g, " ").toUpperCase();
-              const badge = badgeFor(entry.action);
-
-              // build summary
-              let summary = "";
-              if (entry.details) {
-                if (entry.details.amount && entry.details.method) {
-                  summary = `Payment ${fmtIdr(entry.details.amount)} via ${entry.details.method}`;
-                } else if (entry.details.before !== undefined || entry.details.after !== undefined) {
-                  summary = `Changed ${Object.keys(entry.details).map(k =>
-                    `${k}: ${entry.details.before} → ${entry.details.after}`
-                  ).join(", ")}`;
-                } else {
-                  summary = Object.entries(entry.details)
-                    .map(([k,v]) => `${k}: ${String(v)}`)
-                    .join(", ");
-                }
-              }
-
-              return (
-                <div key={entry.id} className="log-entry">
-                  <div className="log-main">
-                    <div className="log-action">
-                      {badge && <span className={`log-badge ${badge}`}>{actionLabel}</span>}
-                      {!badge && actionLabel}
-                      {entry.createdBy && ` • by ${entry.createdBy}`}
-                    </div>
-                    {summary && <div className="log-summary">{summary}</div>}
-                  </div>
-                  <div className="log-meta">{time}</div>
-                </div>
-              );
-            })}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 
   // AddChargeModal (simple)
