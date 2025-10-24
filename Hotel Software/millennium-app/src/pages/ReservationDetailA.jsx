@@ -27,6 +27,29 @@ function useMountLogger(label, extra = {}) {
   }, [label]);
 }
 
+// -----------------------
+  // Temporary stubs for child props (prevent build error)
+  // -----------------------
+ const renderAssignmentRow = () => null;
+ const preUpgradeOptions = [];
+ const sameTypeOptions = [];
+ const upgradeOptions = [];
+ const moveRoomStay = null;
+ const setMoveRoomStay = () => {};
+ const newRoom = "";
+ const setNewRoom = () => {};
+ const upgradeStay = null;
+ const setUpgradeStay = () => {};
+ const upgradeRoom = null;
+ const setUpgradeRoom = () => {};
+ const upgradeIndex = null;
+ const setUpgradeIndex = () => {};
+ const upgradePreRoom = "";
+ const setUpgradePreRoom = () => {};
+ const doUpgradePreCheckIn = () => {};
+ const doUpgradeRoom = () => {};
+ const printCheckOutBill = printCheckOutForm; // alias for legacy prop
+
 /**
  * ReservationDetailA (rewritten)
  *

@@ -51,9 +51,9 @@ export default function ReservationDetailB({
   fmt,
   logReservationChange
 }) {
-  if (!reservation) return <div className="p-4">Loading reservation...</div>;
-
   useMountLogger("ReservationDetailB");
+
+  if (!reservation) return <div className="p-4">Loading reservation...</div>;
 
   const status = (reservation.status || "").toLowerCase();
 
