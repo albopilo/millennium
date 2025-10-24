@@ -916,12 +916,30 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
 
                 // ---- Build summary ----
                 let summary = "";
-                if (entry.details) {
-                  // Payment details
-                  if (entry.action?.toLowerCase().includes("payment") && entry.details.amount && entry.details.method) {
-                    summary = `Amount: ${fmtIdr(entry.details.amount)} • Method: ${entry.details.method}`;
-                    if (entry.details.refNo) summary = ` • Ref: ${entry.details.refNo}`;
-                  }
+                // --- Build summary ---
+let summary = "";
+const details = entry.details || entry.latestPayment || {};
+
+if (entry.action?.toLowerCase().includes("payment") && (details.amount || details.method)) {
+  const amountStr = details.amount ? fmtIdr(details.amount) : "-";
+  const methodStr = details.method || "-";
+  summary = `Amount: ${amountStr} • Method: ${methodStr}`;
+  if (details.refNo) summary += ` • Ref: ${details.refNo}`;
+} 
+else if (details.before !== undefined || details.after !== undefined) {
+  summary = Object.entries(details)
+    .map(([k, v]) => `${k}: ${v}`)
+    .join(", ");
+} 
+else if (typeof details === "object") {
+  summary = Object.entries(details)
+    .map(([k, v]) => `${k}: ${String(v)}`)
+    .join(", ");
+} 
+else if (typeof details === "string") {
+  summary = details;
+}
+
                   // Status change (before/after)
                   else if (entry.details.before !== undefined || entry.details.after !== undefined) {
                     summary = Object.entries(entry.details)
