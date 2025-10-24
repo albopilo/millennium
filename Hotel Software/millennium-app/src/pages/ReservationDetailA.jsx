@@ -938,22 +938,6 @@ else if (typeof details === "string") {
   summary = details;
 }
 
-                  // Status change (before/after)
-                  else if (entry.details.before !== undefined || entry.details.after !== undefined) {
-                    summary = Object.entries(entry.details)
-                      .map(([k, v]) => `${k}: ${v}`)
-                      .join(", ");
-                  }
-                  // Generic key-value summary
-                  else if (typeof entry.details === "object") {
-                    summary = Object.entries(entry.details)
-                      .map(([k, v]) => `${k}: ${String(v)}`)
-                      .join(", ");
-                  } else if (typeof entry.details === "string") {
-                    summary = entry.details;
-                  }
-                }
-
                 return (
                   <div key={entry.id} className={`log-entry card ${badge ? `log-${badge}` : ""}`}>
                     <div className="log-main">
