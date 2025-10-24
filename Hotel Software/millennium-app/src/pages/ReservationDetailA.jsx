@@ -61,7 +61,7 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
   useMountLogger("ReservationDetailA", { id });
   useMountLogger("ReservationDetailB + FolioCard", { note: "may or may not render depending on printMode" });
   useMountLogger("ReservationDetailC", { note: "may or may not render depending on printMode" });
-  
+
   // -----------------------
   // Permissions helpers
   // -----------------------
@@ -1060,8 +1060,6 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
               doUpgradePreCheckIn, doUpgradeRoom, stays, doNoShow, handleEditReservation,
               handleDeleteReservation, navigate, isAdmin, fmt, logReservationChange }}
           />
-          <FolioCard />
-          <LogCard />
 
 
           {/* Modals */}
