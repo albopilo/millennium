@@ -45,6 +45,9 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
   // diagnostic
   useMountLogger("ReservationDetailA", { id });
 
+  // always call both hooks, but with conditional labels for clarity
+  useMountLogger("ReservationDetailB + FolioCard (conditional mount)", { willRender: !printMode });
+  useMountLogger("ReservationDetailC (conditional mount)", { willRender: printMode });
   // -----------------------
   // Permissions helpers
   // -----------------------
@@ -995,110 +998,54 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
   return (
     <div style={{ padding: 16 }}>
       {/* printable render */}
-      {printMode && (
+      {printMode ? (
+        <ReservationDetailC
+          printRef={printRef}
+          printMode={printMode}
+          onTemplatesLoaded={() => {
+            if (printReadyResolverRef.current) {
+              try { printReadyResolverRef.current(); } catch (e) {}
+            }
+          }}
+          reservation={reservation}
+          settings={settings}
+          fmt={fmt}
+          postings={postings}
+          visiblePostings={visiblePostings}
+          displayChargeLines={displayChargeLines}
+          displayChargesTotal={displayChargesTotal}
+          displayPaymentsTotal={displayPaymentsTotal}
+          displayBalance={displayBalance}
+          payments={payments}
+          canOperate={canOperate}
+          isAdmin={isAdmin}
+          showAddCharge={showAddCharge}
+          setShowAddCharge={setShowAddCharge}
+          chargeForm={chargeForm}
+          setChargeForm={setChargeForm}
+          submitCharge={submitCharge}
+          showAddPayment={showAddPayment}
+          setShowAddPayment={setShowAddPayment}
+          paymentForm={paymentForm}
+          setPaymentForm={setPaymentForm}
+          submitPayment={submitPayment}
+          guest={guest}
+        />
+      ) : (
         <>
-          {useMountLogger("ReservationDetailC", { printMode })}
-          <ReservationDetailC
-            printRef={printRef}
-            printMode={printMode}
-            onTemplatesLoaded={() => {
-              if (printReadyResolverRef.current) {
-                try { printReadyResolverRef.current(); } catch (e) { /* noop */ }
-              }
-            }}
-            reservation={reservation}
-            settings={settings}
-            fmt={fmt}
-            postings={postings}
-            visiblePostings={visiblePostings}
-            displayChargeLines={displayChargeLines}
-            displayChargesTotal={displayChargesTotal}
-            displayPaymentsTotal={displayPaymentsTotal}
-            displayBalance={displayBalance}
-            payments={payments}
-            canOperate={canOperate}
-            isAdmin={isAdmin}
-            showAddCharge={showAddCharge}
-            setShowAddCharge={setShowAddCharge}
-            chargeForm={chargeForm}
-            setChargeForm={setChargeForm}
-            submitCharge={submitCharge}
-            showAddPayment={showAddPayment}
-            setShowAddPayment={setShowAddPayment}
-            paymentForm={paymentForm}
-            setPaymentForm={setPaymentForm}
-            submitPayment={submitPayment}
-            guest={guest}
-          />
-        </>
-      )}
-
-      {!printMode && (
-        <>
-          {useMountLogger("ReservationDetailB + FolioCard", { printMode })}
           <ReservationDetailB
-            reservation={reservation}
-            guest={guest}
-            settings={settings}
-            rooms={rooms}
-            assignRooms={assignRooms}
-            setAssignRooms={async (next) => {
-              setAssignRooms(next);
-              try {
-                await updateDoc(doc(db, "reservations", reservation.id), { roomNumbers: next });
-                await createForecastRoomPostings({ ...reservation, roomNumbers: next }, next, guest, rooms, channels);
-                await ensureDepositPosting({ ...reservation, roomNumbers: next }, next);
-                await load();
-              } catch (err) {
-                console.error("setAssignRooms persist error", err);
-              }
-            }}
-            renderAssignmentRow={(i) => {
-              const val = assignRooms[i] || "";
-              const lockType = (Array.isArray(reservation?.roomNumbers) ? reservation.roomNumbers[i] : null) ? rooms.find(r => r.roomNumber === reservation.roomNumbers[i])?.roomType : null;
-              const options = rooms.filter(r => r.status !== "OOO" && r.status !== "Occupied" && (!lockType || r.roomType === lockType));
-              return (
-                <div key={i} style={{ marginBottom: 6 }}>
-                  <select
-                    value={val}
-                    onChange={async (e) => {
-                      const nextVal = e.target.value;
-                      const next = [...assignRooms];
-                      next[i] = nextVal;
-                      setAssignRooms(next);
-                      await updateDoc(doc(db, "reservations", reservation.id), { roomNumbers: next });
-                      await createForecastRoomPostings({ ...reservation, roomNumbers: next }, next, guest, rooms, channels);
-                      await ensureDepositPosting({ ...reservation, roomNumbers: next }, next);
-                      await load();
-                    }}
-                  >
-                    <option value="">Select room</option>
-                    {options.map(r => <option key={r.roomNumber} value={r.roomNumber}>{r.roomNumber} ({r.roomType}) {r.status ? `[${r.status}]` : ""}</option>)}
-                  </select>
-                </div>
-              );
-            }}
-            canOperate={canOperate}
-            canUpgrade={canUpgrade}
-            doCheckIn={doCheckIn}
-            doCheckOut={doCheckOut}
-            printCheckInForm={printCheckInForm}
-            printCheckOutBill={printCheckOutForm}
-            stays={stays}
-            fmt={fmt}
-            isAdmin={isAdmin}
-            navigate={navigate}
-            doNoShow={doNoShow}
-            handleEditReservation={handleEditReservation}
-            handleDeleteReservation={handleDeleteReservation}
-            logReservationChange={logReservationChange}
+            {...{ reservation, guest, settings, rooms, assignRooms, renderAssignmentRow,
+              setAssignRooms, canOperate, canUpgrade, doCheckIn, doCheckOut,
+              printCheckInForm, printCheckOutBill, preUpgradeOptions, sameTypeOptions,
+              upgradeOptions, moveRoomStay, setMoveRoomStay, newRoom, setNewRoom,
+              upgradeStay, setUpgradeStay, upgradeRoom, setUpgradeRoom,
+              upgradeIndex, setUpgradeIndex, upgradePreRoom, setUpgradePreRoom,
+              doUpgradePreCheckIn, doUpgradeRoom, stays, doNoShow, handleEditReservation,
+              handleDeleteReservation, navigate, isAdmin, fmt, logReservationChange }}
           />
-
-          {/* only one folio card (no duplication) */}
           <FolioCard />
-
-          {/* change log */}
           <LogCard />
+
 
           {/* Modals */}
           <AddChargeModal open={showAddCharge} onClose={() => setShowAddCharge(false)} />
