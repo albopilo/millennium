@@ -802,9 +802,9 @@ const fmt = (raw) => {
         />
        )}
 
-      // --- When NOT printing, show normal layout --- 
-      {!printMode && (
-        <ReservationDetailB
+      {/* --- When NOT printing, show normal layout --- */}
+{!printMode && (
+  <ReservationDetailB
             reservation={reservation}
             guest={guest}
             settings={settings}
@@ -862,7 +862,7 @@ const fmt = (raw) => {
             logReservationChange={logReservationChange}
           />
 
-        // --- Folio & Payments Section ---
+         {/* --- Folio & Payments Section --- */}
     <div style={{
       marginTop: 20,
       background: "#fff",
