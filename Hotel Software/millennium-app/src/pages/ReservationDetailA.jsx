@@ -802,7 +802,7 @@ const fmt = (raw) => {
         />
        )}
 
-      {/* When NOT printing, show normal layout */}
+      // --- When NOT printing, show normal layout --- 
       {!printMode && (
         <ReservationDetailB
             reservation={reservation}
