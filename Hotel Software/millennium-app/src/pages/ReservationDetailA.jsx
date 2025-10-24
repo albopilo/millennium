@@ -1062,11 +1062,21 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
           />
 
 
-          {/* Modals */}
-          <AddChargeModal open={showAddCharge} onClose={() => setShowAddCharge(false)} />
-          <AddPaymentModal open={showAddPayment} onClose={() => setShowAddPayment(false)} />
-        </>
-      )}
-    </div>
-  );
+          {/* Reintroduce Folio & Payment section */}
+      <div style={{ marginTop: 24 }}>
+        <FolioCard />
+      </div>
+
+      {/* Change Log placed after Folio */}
+      <div style={{ marginTop: 16 }}>
+        <LogCard />
+      </div>
+
+      {/* Modals */}
+      <AddChargeModal open={showAddCharge} onClose={() => setShowAddCharge(false)} />
+      <AddPaymentModal open={showAddPayment} onClose={() => setShowAddPayment(false)} />
+    </>
+  )}
+</div>
+);
 }
