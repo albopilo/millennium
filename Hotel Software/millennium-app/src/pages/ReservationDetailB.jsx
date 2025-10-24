@@ -1,14 +1,7 @@
 // src/pages/ReservationDetailB.jsx
 import React from "react";
 import "../styles/ReservationDetail.css";
-
-// --- Diagnostic mount logger ---
-function useMountLogger(label, extra = {}) {
-  React.useEffect(() => {
-    console.log(`[MOUNT] ${label}`, extra);
-    return () => console.log(`[UNMOUNT] ${label}`, extra);
-  }, [label]);
-}
+import useMountLogger from "../hooks/useMountLogger";
 
 
 export default function ReservationDetailB({

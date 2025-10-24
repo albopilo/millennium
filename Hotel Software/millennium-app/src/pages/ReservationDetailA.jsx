@@ -18,14 +18,7 @@ import {
 import { db } from "../firebase";
 import ReservationDetailB from "./ReservationDetailB";
 import ReservationDetailC from "./ReservationDetailC";
-
-// --- Diagnostic mount logger ---
-function useMountLogger(label, extra = {}) {
-  React.useEffect(() => {
-    console.log(`[MOUNT] ${label}`, extra);
-    return () => console.log(`[UNMOUNT] ${label}`, extra);
-  }, [label]);
-}
+import useMountLogger from "../hooks/useMountLogger";
 
 // -----------------------
   // Temporary stubs for child props (prevent build error)
@@ -64,12 +57,11 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
   const navigate = useNavigate();
   const actorName = currentUser?.displayName || currentUser?.email || "frontdesk";
 
-  // diagnostic
+// always call hooks unconditionally to satisfy React rules
   useMountLogger("ReservationDetailA", { id });
-
-  // always call both hooks, but with conditional labels for clarity
-  useMountLogger("ReservationDetailB + FolioCard (conditional mount)", { willRender: !printMode });
-  useMountLogger("ReservationDetailC (conditional mount)", { willRender: printMode });
+  useMountLogger("ReservationDetailB + FolioCard", { note: "may or may not render depending on printMode" });
+  useMountLogger("ReservationDetailC", { note: "may or may not render depending on printMode" });
+  
   // -----------------------
   // Permissions helpers
   // -----------------------
