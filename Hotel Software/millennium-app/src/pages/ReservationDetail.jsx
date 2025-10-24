@@ -1,14 +1,12 @@
 import React from "react";
 import ReservationDetailA from "./ReservationDetailA";
-import ReservationDetailB from "./ReservationDetailB";
-import ReservationDetailC from "./ReservationDetailC";
 
+// ✅ ReservationDetailA already includes ReservationDetailB  C internally
+// This wrapper just exists for routing or layout consistency.
 export default function ReservationDetailPage(props) {
   return (
     <div className="reservations-container">
       <ReservationDetailA {...props} />
-      <ReservationDetailB {...props} />
-      <ReservationDetailC {...props} />
     </div>
   );
 }

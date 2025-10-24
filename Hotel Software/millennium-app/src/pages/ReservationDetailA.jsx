@@ -857,72 +857,79 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
   }
 
   function LogCard() {
+    if (logs.length === 0) {
+      return (
+        <Card title="Change Log" style={{ marginTop: 16 }}>
+          <div style={{ color: "#9ca3af", fontStyle: "italic" }}>No changes logged yet.</div>
+        </Card>
+      );
+    }
+
+    // Group logs by date (YYYY-MM-DD)
+    const grouped = logs.reduce((acc, log) => {
+      const dateObj = log.createdAt?.toDate ? log.createdAt.toDate() : parseToDate(log.createdAt) || new Date();
+      const key = dateObj.toISOString().slice(0, 10);
+      acc[key] = acc[key] || [];
+      acc[key].push(log);
+      return acc;
+    }, {});
+
     return (
       <Card title="Change Log" style={{ marginTop: 16 }}>
-        {logs.length === 0 ? (
-          <div style={{ color: "#9ca3af", fontStyle: "italic" }}>No changes logged yet.</div>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            {logs.map((l) => {
-              const d = l.createdAt?.toDate ? l.createdAt.toDate() : parseToDate(l.createdAt) || new Date();
-              const prettyDate = d.toLocaleString();
-              let detailText = "";
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          {Object.entries(grouped).map(([day, dayLogs]) => (
+            <div key={day} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <div style={{ fontWeight: 700, color: "#1f2937", fontSize: 14, borderBottom: "1px solid #e5e7eb", paddingBottom: 4 }}>
+                {new Date(day).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" })}
+              </div>
+              {dayLogs.map((l) => {
+                const d = l.createdAt?.toDate ? l.createdAt.toDate() : parseToDate(l.createdAt) || new Date();
+                const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+                const action = (l.action || "").replace(/_/g, " ").toUpperCase();
 
-              if (l.details) {
-                if (l.details.amount && l.details.method) {
-                  detailText = `Payment ${fmtIdr(l.details.amount)} via ${l.details.method}`;
-                } else if (l.details.updates) {
-                  detailText = Object.entries(l.details.updates)
-                    .map(([k, v]) => `${k}: ${v}`)
-                    .join(", ");
-                } else if (typeof l.details === "string") {
-                  detailText = l.details;
-                } else {
-                  try {
-                    detailText = JSON.stringify(l.details, null, 2);
-                  } catch {
-                    detailText = String(l.details);
+                let summary = "";
+                if (l.details) {
+                  if (l.details.amount && l.details.method) {
+                    summary = `Payment ${fmtIdr(l.details.amount)} via ${l.details.method}`;
+                  } else if (l.details.updates) {
+                    summary = Object.entries(l.details.updates)
+                      .map(([k, v]) => `${k}: ${v}`)
+                      .join(", ");
+                  } else if (typeof l.details === "string") {
+                    summary = l.details;
+                  } else {
+                    try {
+                      summary = Object.entries(l.details)
+                        .map(([k, v]) => `${k}: ${v}`)
+                        .join(", ");
+                    } catch {
+                      summary = String(l.details);
+                    }
                   }
                 }
-              }
 
-              return (
-                <div
-                  key={l.id}
-                  style={{
-                    background: "#f9fafb",
-                    border: "1px solid #e5e7eb",
-                    borderRadius: 6,
-                    padding: "8px 12px",
-                    fontSize: 14
-                  }}
-                >
-                  <div style={{ fontWeight: 600, color: "#111827" }}>
-                    {(l.action || "").toUpperCase()}
-                  </div>
-                  <div style={{ color: "#6b7280", fontSize: 12 }}>{prettyDate}</div>
-                  {detailText && (
-                    <div
-                      style={{
-                        marginTop: 6,
-                        background: "#fff",
-                        borderRadius: 4,
-                        padding: "6px 8px",
-                        fontFamily: "monospace",
-                        whiteSpace: "pre-wrap",
-                        fontSize: 12,
-                        color: "#374151",
-                        overflowWrap: "anywhere"
-                      }}
-                    >
-                      {detailText}
+                return (
+                  <div
+                    key={l.id}
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "flex-start",
+                      padding: "6px 0",
+                      borderBottom: "1px dashed #e5e7eb"
+                    }}
+                  >
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 600, color: "#111827" }}>{action}</div>
+                      {summary && <div style={{ color: "#374151", fontSize: 13 }}>{summary}</div>}
                     </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
+                    <div style={{ color: "#6b7280", fontSize: 12, whiteSpace: "nowrap" }}>{time}</div>
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </div>
       </Card>
     );
   }
