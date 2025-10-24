@@ -501,37 +501,64 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
   // -----------------------
   // Submit charge
   // -----------------------
-  const submitCharge = async () => {
-    const qty = Math.max(1, toInt(chargeForm.qtyStr));
-    const unit = Math.max(0, toInt(chargeForm.unitStr));
-    const total = qty * unit;
-    if (!chargeForm.description?.trim()) { alert("Description required"); return; }
-    if (total <= 0) { alert("Total must be > 0"); return; }
-    const status = (reservation?.status || "").toLowerCase() === "checked-in" ? "posted" : "forecast";
-    try {
-      await addDoc(collection(db, "postings"), {
+const submitCharge = async () => {
+  const qty = Math.max(1, toInt(chargeForm.qtyStr));
+  const unit = Math.max(0, toInt(chargeForm.unitStr));
+  const total = qty * unit;
+  if (!chargeForm.description?.trim()) { alert("Description required"); return; }
+  if (total <= 0) { alert("Total must be > 0"); return; }
+  const status = (reservation?.status || "").toLowerCase() === "checked-in" ? "posted" : "forecast";
+  try {
+    await addDoc(collection(db, "postings"), {
+      reservationId: reservation.id,
+      stayId: null,
+      roomNumber: null,
+      description: chargeForm.description.trim(),
+      amount: total,
+      tax: 0,
+      service: 0,
+      quantity: qty,
+      unitAmount: unit,
+      accountCode: (chargeForm.accountCode || "MISC").toUpperCase(),
+      status,
+      createdAt: new Date(),
+      createdBy: actorName
+    });
+
+    // 🟢 Optimistic local update for charges
+    setPostings(prev => [
+      ...prev,
+      {
+        id: Math.random().toString(36).slice(2),
         reservationId: reservation.id,
-        stayId: null,
-        roomNumber: null,
         description: chargeForm.description.trim(),
         amount: total,
-        tax: 0,
-        service: 0,
-        quantity: qty,
-        unitAmount: unit,
         accountCode: (chargeForm.accountCode || "MISC").toUpperCase(),
         status,
         createdAt: new Date(),
-        createdBy: actorName
-      });
-      setShowAddCharge(false);
-      setChargeForm({ description: "", qtyStr: "1", unitStr: "", accountCode: "MISC" });
-      await load();
-    } catch (err) {
-      console.error("submitCharge error", err);
-      alert("Failed to add charge");
-    }
-  };
+        createdBy: actorName,
+      },
+    ]);
+
+    // Optional delayed reload to resync backend
+    setTimeout(load, 800);
+
+    // 🟢 Log the new charge
+    await logReservationChange("charge_added", {
+      description: chargeForm.description.trim(),
+      amount: total,
+      accountCode: (chargeForm.accountCode || "MISC").toUpperCase(),
+    });
+
+    setShowAddCharge(false);
+    setChargeForm({ description: "", qtyStr: "1", unitStr: "", accountCode: "MISC" });
+    await load();
+  } catch (err) {
+    console.error("submitCharge error", err);
+    alert("Failed to add charge");
+  }
+};
+
 
   // -----------------------
   // Submit payment
@@ -553,7 +580,24 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
       setShowAddPayment(false);
       setPaymentForm({ amountStr: "", method: "cash", refNo: "", type: "payment" });
       await logReservationChange("payment_added", { amount: amt, method: paymentForm.method });
-      await load();
+      // 🟢 Optimistic local update for payments
+    setPayments(prev => [
+      ...prev,
+      {
+        id: Math.random().toString(36).slice(2),
+        reservationId: reservation.id,
+        stayId: null,
+        amount: amt,
+        method: paymentForm.method,
+        refNo: paymentForm.refNo || "",
+        capturedAt: new Date(),
+        capturedBy: actorName,
+        type: "payment",
+      },
+    ]);
+
+    // Optional delayed reload to resync backend
+    setTimeout(load, 800);
     } catch (err) {
       console.error("submitPayment error", err);
       alert("Failed to add payment");
