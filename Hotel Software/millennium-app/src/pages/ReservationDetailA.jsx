@@ -857,82 +857,94 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
   }
 
   function LogCard() {
-    if (logs.length === 0) {
-      return (
-        <Card title="Change Log" style={{ marginTop: 16 }}>
-          <div style={{ color: "#9ca3af", fontStyle: "italic" }}>No changes logged yet.</div>
-        </Card>
-      );
-    }
-
-    // Group logs by date (YYYY-MM-DD)
-    const grouped = logs.reduce((acc, log) => {
-      const dateObj = log.createdAt?.toDate ? log.createdAt.toDate() : parseToDate(log.createdAt) || new Date();
-      const key = dateObj.toISOString().slice(0, 10);
-      acc[key] = acc[key] || [];
-      acc[key].push(log);
-      return acc;
-    }, {});
-
+  if (logs.length === 0) {
     return (
-      <Card title="Change Log" style={{ marginTop: 16 }}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          {Object.entries(grouped).map(([day, dayLogs]) => (
-            <div key={day} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              <div style={{ fontWeight: 700, color: "#1f2937", fontSize: 14, borderBottom: "1px solid #e5e7eb", paddingBottom: 4 }}>
-                {new Date(day).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" })}
-              </div>
-              {dayLogs.map((l) => {
-                const d = l.createdAt?.toDate ? l.createdAt.toDate() : parseToDate(l.createdAt) || new Date();
-                const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-                const action = (l.action || "").replace(/_/g, " ").toUpperCase();
-
-                let summary = "";
-                if (l.details) {
-                  if (l.details.amount && l.details.method) {
-                    summary = `Payment ${fmtIdr(l.details.amount)} via ${l.details.method}`;
-                  } else if (l.details.updates) {
-                    summary = Object.entries(l.details.updates)
-                      .map(([k, v]) => `${k}: ${v}`)
-                      .join(", ");
-                  } else if (typeof l.details === "string") {
-                    summary = l.details;
-                  } else {
-                    try {
-                      summary = Object.entries(l.details)
-                        .map(([k, v]) => `${k}: ${v}`)
-                        .join(", ");
-                    } catch {
-                      summary = String(l.details);
-                    }
-                  }
-                }
-
-                return (
-                  <div
-                    key={l.id}
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "flex-start",
-                      padding: "6px 0",
-                      borderBottom: "1px dashed #e5e7eb"
-                    }}
-                  >
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontWeight: 600, color: "#111827" }}>{action}</div>
-                      {summary && <div style={{ color: "#374151", fontSize: 13 }}>{summary}</div>}
-                    </div>
-                    <div style={{ color: "#6b7280", fontSize: 12, whiteSpace: "nowrap" }}>{time}</div>
-                  </div>
-                );
-              })}
-            </div>
-          ))}
+      <div className="change-log-section">
+        <div className="change-log-card">
+          <div className="change-log-header">Change Log</div>
+          <div className="log-empty">No changes logged yet.</div>
         </div>
-      </Card>
+      </div>
     );
   }
+
+  const grouped = logs.reduce((acc, log) => {
+    const dateObj = log.createdAt?.toDate ? log.createdAt.toDate() : parseToDate(log.createdAt) || new Date();
+    const key = dateObj.toISOString().slice(0, 10);
+    acc[key] = acc[key] || [];
+    acc[key].push({ ...log, _dateObj: dateObj });
+    return acc;
+  }, {});
+
+  const badgeFor = (action) => {
+    const a = action?.toLowerCase() || "";
+    if (a.includes("payment")) return "payment";
+    if (a.includes("check_in")) return "checkin";
+    if (a.includes("check_out")) return "checkout";
+    if (a.includes("no-show")) return "noshow";
+    if (a.includes("delete")) return "delete";
+    if (a.includes("edit")) return "edit";
+    return "";
+  };
+
+  return (
+    <div className="change-log-section">
+      <div className="change-log-card">
+        <div className="change-log-header">Change Log</div>
+
+        {Object.entries(grouped).map(([day, entries]) => (
+          <div key={day}>
+            <div className="change-log-day">
+              {new Date(day).toLocaleDateString(undefined, {
+                weekday: "short",
+                month: "short",
+                day: "numeric",
+                year: "numeric",
+              })}
+            </div>
+
+            {entries.map((entry) => {
+              const time = entry._dateObj.toLocaleTimeString([], {
+                hour: "2-digit",
+                minute: "2-digit",
+              });
+              const badge = badgeFor(entry.action);
+              const actionLabel = (entry.action || "").replace(/_/g, " ").toUpperCase();
+
+              let summary = "";
+              if (entry.details) {
+                if (entry.details.amount && entry.details.method)
+                  summary = `Payment ${fmtIdr(entry.details.amount)} via ${entry.details.method}`;
+                else if (entry.details.updates)
+                  summary = Object.entries(entry.details.updates)
+                    .map(([k, v]) => `${k}: ${v}`)
+                    .join(", ");
+                else
+                  summary = Object.entries(entry.details)
+                    .map(([k, v]) => `${k}: ${String(v)}`)
+                    .join(", ");
+              }
+
+              return (
+                <div key={entry.id} className="log-entry">
+                  <div className="log-main">
+                    <div className="log-action">
+                      {badge && <span className={`log-badge ${badge}`}>{actionLabel}</span>}
+                      {!badge && actionLabel}
+                    </div>
+                    {summary && <div className="log-summary">{summary}</div>}
+                  </div>
+                  <div className="log-meta">{time}</div>
+                </div>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 
   // AddChargeModal (simple)
   function AddChargeModal({ open, onClose }) {
