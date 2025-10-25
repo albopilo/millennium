@@ -4,6 +4,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import "../styles/ReservationDetail.css";
 import { doc, getDoc } from "firebase/firestore";
 import { db } from "../firebase";
+import useMountLogger from "../hooks/useMountLogger";
 
 /**
  * Presentational folio & payments component.
@@ -45,6 +46,8 @@ export default function ReservationDetailC({
   fmt = (d) => (d ? new Date(d).toLocaleString() : "-"),
   guest = null
 }) {
+  useMountLogger("ReservationDetailC");
+
 const [templates, setTemplates] = useState({
     checkInTemplate: { header: "Hotel", body: "<p>Check-in</p>", footer: "" },
     checkOutTemplate: { header: "Hotel", body: "<p>Check-out</p>", footer: "" }

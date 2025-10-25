@@ -1,6 +1,9 @@
+
 // src/pages/ReservationDetailB.jsx
 import React from "react";
 import "../styles/ReservationDetail.css";
+import useMountLogger from "../hooks/useMountLogger";
+
 
 export default function ReservationDetailB({
   reservation,
@@ -42,6 +45,8 @@ export default function ReservationDetailB({
   fmt,
   logReservationChange
 }) {
+  useMountLogger("ReservationDetailB");
+
   if (!reservation) return <div className="p-4">Loading reservation...</div>;
 
   const status = (reservation.status || "").toLowerCase();
@@ -51,7 +56,7 @@ export default function ReservationDetailB({
       <div className="card-header">
         <h2>Reservation Detail</h2>
         <div className="header-actions">
-           {reservation.status === "booked" && canOperate && (
+                  {reservation.status === "booked" && canOperate && (
   <button onClick={doNoShow} className="btn btn-warning">Mark No Show</button>
 )}
 {/* Removed navigation-based edit to prevent blank page */}
@@ -140,10 +145,6 @@ export default function ReservationDetailB({
           </section>
         )}
 
-        {reservation.status === "booked" && canOperate && (
-  <button onClick={doNoShow} className="btn btn-warning">Mark No Show</button>
-)}
-
         {canUpgrade && (
           <section className="reservation-section">
             <h3 className="section-title">Upgrades</h3>
@@ -167,6 +168,64 @@ export default function ReservationDetailB({
             )}
           </section>
         )}
+
+        {/* --- Change Log Section --- */}
+       <section className="reservation-section" style={{ marginTop: 24 }}>
+         <h3 className="section-title">Change Log</h3>
+
+         {(!reservation.changeLogs || reservation.changeLogs.length === 0) && (
+           <div className="muted">No changes logged yet.</div>
+         )}
+
+         {reservation.changeLogs?.map((log, i) => {
+           const parsed = typeof log.details === "string" ? (() => {
+             try { return JSON.parse(log.details); } catch { return {}; }
+           })() : log.details || {};
+           const latestPayment = parsed.latestPayment || {};
+
+           return (
+             <div key={i} className="log-entry card" style={{
+               marginTop: 8,
+               padding: 12,
+               border: "1px solid #ddd",
+               borderRadius: 8,
+               background: "#fafafa"
+             }}>
+               <div style={{ fontWeight: 600, fontSize: 14 }}>
+                 {log.action?.toUpperCase() || "UNKNOWN"}
+               </div>
+               <div style={{ color: "#555", fontSize: 12, marginBottom: 6 }}>
+                 {log.timestamp ? new Date(log.timestamp).toLocaleString() : "-"}
+               </div>
+
+               {log.action === "PAYMENT_ADDED" && latestPayment?.amount ? (
+                 <div style={{ fontSize: 13, lineHeight: 1.4 }}>
+                   <div><strong>Method:</strong> {latestPayment.method || "-"}</div>
+                   <div><strong>Amount:</strong> IDR {Number(latestPayment.amount).toLocaleString("id-ID")}</div>
+                   <div><strong>Captured By:</strong> {latestPayment.capturedBy || "-"}</div>
+                   <div><strong>Captured At:</strong> {latestPayment.capturedAt?.seconds
+                     ? new Date(latestPayment.capturedAt.seconds * 1000).toLocaleString()
+                     : "-"}</div>
+                   {latestPayment.refNo && (
+                     <div><strong>Reference:</strong> {latestPayment.refNo}</div>
+                   )}
+                 </div>
+               ) : (
+                 <pre style={{
+                   fontSize: 12,
+                   background: "#fff",
+                   padding: 8,
+                   borderRadius: 6,
+                   border: "1px solid #eee",
+                   overflowX: "auto"
+                 }}>
+                   {JSON.stringify(parsed, null, 2)}
+                 </pre>
+               )}
+             </div>
+           );
+         })}
+       </section>
       </div>
     </div>
   );
