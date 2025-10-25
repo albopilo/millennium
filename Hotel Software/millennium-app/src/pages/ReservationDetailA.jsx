@@ -1153,7 +1153,7 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
 
   // ---------- Add Charge Modal (no debounce) ----------
   // ---------- Add Charge Modal (ZERO re-render lag) ----------
-function AddChargeModal({ open, onClose }) {
+function AddChargeModal({ open, onClose, reservation, actorName, setPostings, logReservationChange }) {
   const descRef = useRef();
   const qtyRef = useRef();
   const unitRef = useRef();
@@ -1172,8 +1172,9 @@ function AddChargeModal({ open, onClose }) {
     if (total <= 0) return alert("Total must be > 0");
 
     const status = (reservation?.status || "").toLowerCase() === "checked-in" ? "posted" : "forecast";
+
     const optimistic = {
-      id: `temp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      id: `temp_${Date.now()}`,
       reservationId: reservation.id,
       description,
       amount: total,
@@ -1190,17 +1191,7 @@ function AddChargeModal({ open, onClose }) {
     onClose();
 
     try {
-      await addDoc(collection(db, "postings"), {
-        reservationId: reservation.id,
-        description,
-        amount: total,
-        quantity: qty,
-        unitAmount: unit,
-        accountCode,
-        status,
-        createdAt: new Date(),
-        createdBy: actorName,
-      });
+      await addDoc(collection(db, "postings"), optimistic);
       await logReservationChange("charge_added", { description, amount: total, accountCode });
     } catch (err) {
       console.error("submitCharge error", err);
@@ -1213,12 +1204,8 @@ function AddChargeModal({ open, onClose }) {
     <div className="modal-overlay">
       <div className="modal-box">
         <h3>Add Charge</h3>
-
-        <div>
-          <label>Description</label>
-          <input ref={descRef} defaultValue="" />
-        </div>
-
+        <label>Description</label>
+        <input ref={descRef} defaultValue="" />
         <div style={{ display: "flex", gap: 8 }}>
           <div style={{ flex: 1 }}>
             <label>Qty</label>
@@ -1237,7 +1224,6 @@ function AddChargeModal({ open, onClose }) {
             </select>
           </div>
         </div>
-
         <div className="modal-footer">
           <button onClick={onClose}>Cancel</button>
           <button onClick={handleSubmit} className="btn btn-primary">Save Charge</button>
@@ -1247,8 +1233,9 @@ function AddChargeModal({ open, onClose }) {
   );
 }
 
+
 // ---------- Add Payment Modal (ZERO re-render lag) ----------
-function AddPaymentModal({ open, onClose }) {
+function AddPaymentModal({ open, onClose, reservation, actorName, setPayments, logReservationChange }) {
   const amountRef = useRef();
   const methodRef = useRef();
   const refNoRef = useRef();
@@ -1263,7 +1250,7 @@ function AddPaymentModal({ open, onClose }) {
     if (amt <= 0) return alert("Payment must be > 0");
 
     const optimistic = {
-      id: `temp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      id: `temp_${Date.now()}`,
       reservationId: reservation.id,
       amount: amt,
       method,
@@ -1276,14 +1263,7 @@ function AddPaymentModal({ open, onClose }) {
     onClose();
 
     try {
-      await addDoc(collection(db, "payments"), {
-        reservationId: reservation.id,
-        amount: amt,
-        method,
-        refNo,
-        capturedAt: new Date(),
-        capturedBy: actorName,
-      });
+      await addDoc(collection(db, "payments"), optimistic);
       await logReservationChange("payment_added", { amount: amt, method, refNo });
     } catch (err) {
       console.error("submitPayment error", err);
@@ -1296,24 +1276,16 @@ function AddPaymentModal({ open, onClose }) {
     <div className="modal-overlay">
       <div className="modal-box">
         <h3>Add Payment</h3>
-
-        <div>
-          <label>Amount (IDR)</label>
-          <input ref={amountRef} defaultValue="" />
-        </div>
-        <div>
-          <label>Method</label>
-          <select ref={methodRef} defaultValue="cash">
-            <option value="cash">Cash</option>
-            <option value="card">Card</option>
-            <option value="bank">Bank</option>
-          </select>
-        </div>
-        <div>
-          <label>Reference No</label>
-          <input ref={refNoRef} defaultValue="" />
-        </div>
-
+        <label>Amount (IDR)</label>
+        <input ref={amountRef} defaultValue="" />
+        <label>Method</label>
+        <select ref={methodRef} defaultValue="cash">
+          <option value="cash">Cash</option>
+          <option value="card">Card</option>
+          <option value="bank">Bank</option>
+        </select>
+        <label>Reference No</label>
+        <input ref={refNoRef} defaultValue="" />
         <div className="modal-footer">
           <button onClick={onClose}>Cancel</button>
           <button onClick={handleSubmit} className="btn btn-primary">Save Payment</button>
@@ -1322,7 +1294,6 @@ function AddPaymentModal({ open, onClose }) {
     </div>
   );
 }
-
 
   // ---------- Render ----------
   if (loading || !reservation) {
@@ -1456,8 +1427,24 @@ function AddPaymentModal({ open, onClose }) {
             <LogCard />
           </div>
 
-          <AddChargeModal open={showAddCharge} onClose={() => setShowAddCharge(false)} />
-          <AddPaymentModal open={showAddPayment} onClose={() => setShowAddPayment(false)} />
+          <AddChargeModal
+  open={showAddCharge}
+  onClose={() => setShowAddCharge(false)}
+  reservation={reservation}
+  actorName={actorName}
+  setPostings={setPostings}
+  logReservationChange={logReservationChange}
+/>
+
+<AddPaymentModal
+  open={showAddPayment}
+  onClose={() => setShowAddPayment(false)}
+  reservation={reservation}
+  actorName={actorName}
+  setPayments={setPayments}
+  logReservationChange={logReservationChange}
+/>
+
         </>
       )}
     </div>
