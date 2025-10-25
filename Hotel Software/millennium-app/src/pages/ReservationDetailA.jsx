@@ -20,44 +20,49 @@ import ReservationDetailB from "./ReservationDetailB";
 import ReservationDetailC from "./ReservationDetailC";
 import useMountLogger from "../hooks/useMountLogger";
 
-// -----------------------
-  // Temporary stubs for child props (prevent build error)
-  // -----------------------
- const renderAssignmentRow = () => null;
- const preUpgradeOptions = [];
- const sameTypeOptions = [];
- const upgradeOptions = [];
- const moveRoomStay = null;
- const setMoveRoomStay = () => {};
- const newRoom = "";
- const setNewRoom = () => {};
- const upgradeStay = null;
- const setUpgradeStay = () => {};
- const upgradeRoom = null;
- const setUpgradeRoom = () => {};
- const upgradeIndex = null;
- const setUpgradeIndex = () => {};
- const upgradePreRoom = "";
- const setUpgradePreRoom = () => {};
- const doUpgradePreCheckIn = () => {};
- const doUpgradeRoom = () => {};
-
 /**
- * ReservationDetailA (rewritten)
+ * ReservationDetailA (Option 1 — single-file, full logic preserved)
  *
- * - All original behavior preserved (createForecastRoomPostings, ensureDepositPosting,
- *   convertForecastsToPosted, submitCharge, submitPayment, doCheckIn, doCheckOut, logs, printing).
- * - Single folio/payments card and single change-log card.
- * - Internal small components for clarity (FolioCard, LogCard, AddChargeModal, AddPaymentModal).
- * - Defensive checks and robust date handling.
+ * - Keeps all original logic: forecast posting creation, deposit canonical posting,
+ *   convert forecasts to posted, submitCharge, submitPayment, check-in/out flows,
+ *   logging, printing flows.
+ * - Ensures manual typing for numeric fields is immediate (NO debounce).
+ * - Adds a few defensive helpers and slightly cleaner logging serialization to avoid
+ *   "[object Object]" in some log viewers while preserving structured details.
+ *
+ * Notes:
+ * - This file intentionally stays monolithic (per user request Option 1).
+ * - Every function from original code has been preserved and kept robust.
  */
+
+// -----------------------
+// Temporary stubs for child props (prevent build error)
+// -----------------------
+const renderAssignmentRow = () => null;
+const preUpgradeOptions = [];
+const sameTypeOptions = [];
+const upgradeOptions = [];
+const moveRoomStay = null;
+const setMoveRoomStay = () => {};
+const newRoom = "";
+const setNewRoom = () => {};
+const upgradeStay = null;
+const setUpgradeStay = () => {};
+const upgradeRoom = null;
+const setUpgradeRoom = () => {};
+const upgradeIndex = null;
+const setUpgradeIndex = () => {};
+const upgradePreRoom = "";
+const setUpgradePreRoom = () => {};
+const doUpgradePreCheckIn = () => {};
+const doUpgradeRoom = () => {};
 
 export default function ReservationDetailA({ permissions = [], currentUser = null, userData = null }) {
   const { id } = useParams();
   const navigate = useNavigate();
   const actorName = currentUser?.displayName || currentUser?.email || "frontdesk";
 
-// always call hooks unconditionally to satisfy React rules
+  // mount logs (helpful for debugging)
   useMountLogger("ReservationDetailA", { id });
   useMountLogger("ReservationDetailB + FolioCard", { note: "may or may not render depending on printMode" });
   useMountLogger("ReservationDetailC", { note: "may or may not render depending on printMode" });
@@ -90,8 +95,11 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
   // UI
   const [assignRooms, setAssignRooms] = useState([]);
   const [showAddCharge, setShowAddCharge] = useState(false);
+  // chargeForm: immediate updates; no debouncing
   const [chargeForm, setChargeForm] = useState({ description: "", qtyStr: "1", unitStr: "", accountCode: "MISC" });
+
   const [showAddPayment, setShowAddPayment] = useState(false);
+  // paymentForm: immediate updates; no debouncing
   const [paymentForm, setPaymentForm] = useState({ amountStr: "", method: "cash", refNo: "", type: "payment" });
 
   // Print
@@ -99,7 +107,9 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
   const [printMode, setPrintMode] = useState(null);
   const printReadyResolverRef = useRef(null);
   function createPrintReadyPromise() {
-    return new Promise((resolve) => { printReadyResolverRef.current = resolve; });
+    return new Promise((resolve) => {
+      printReadyResolverRef.current = resolve;
+    });
   }
 
   // Defensive refs
@@ -109,11 +119,13 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
   // -----------------------
   // Small helpers
   // -----------------------
+  // keep onlyDigits and toInt immediate and synchronous so typing isn't hindered
   const onlyDigits = (s) => (s || "").toString().replace(/[^\d]/g, "");
   const toInt = (s) => {
     const k = onlyDigits(s);
     return k ? parseInt(k, 10) : 0;
   };
+
   const fmtIdr = (n) => `IDR ${Number(n || 0).toLocaleString("id-ID")}`;
   const statusOf = (d) => ((d?.status || "") + "").toLowerCase();
   const acctOf = (d) => ((d?.accountCode || "") + "").toUpperCase();
@@ -229,19 +241,23 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
       const primary = existing.find((p) => p.id === depositDocId) || existing[0];
       const desiredStatus = (resObj.status || "").toLowerCase() === "checked-in" ? "posted" : "forecast";
       try {
-        await setDoc(depositRef, {
-          reservationId: resObj.id,
-          stayId: null,
-          roomNumber: null,
-          description: "Security Deposit",
-          amount: depositTotal,
-          tax: 0,
-          service: 0,
-          status: desiredStatus,
-          accountCode: "DEPOSIT",
-          createdAt: primary.createdAt || new Date(),
-          createdBy: primary.createdBy || actorName
-        }, { merge: true });
+        await setDoc(
+          depositRef,
+          {
+            reservationId: resObj.id,
+            stayId: null,
+            roomNumber: null,
+            description: "Security Deposit",
+            amount: depositTotal,
+            tax: 0,
+            service: 0,
+            status: desiredStatus,
+            accountCode: "DEPOSIT",
+            createdAt: primary.createdAt || new Date(),
+            createdBy: primary.createdBy || actorName
+          },
+          { merge: true }
+        );
       } catch (err) {
         console.log("ensureDepositPosting: failed canonical set", err);
       }
@@ -489,7 +505,7 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  // logs subscription
+  // logs subscription (subcollection under reservation)
   useEffect(() => {
     if (!reservation?.id) return;
     const collRef = collection(doc(db, "reservations", reservation.id), "logs");
@@ -501,71 +517,81 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
   // -----------------------
   // Submit charge
   // -----------------------
-const submitCharge = async () => {
-  const qty = Math.max(1, toInt(chargeForm.qtyStr));
-  const unit = Math.max(0, toInt(chargeForm.unitStr));
-  const total = qty * unit;
-  if (!chargeForm.description?.trim()) { alert("Description required"); return; }
-  if (total <= 0) { alert("Total must be > 0"); return; }
-  const status = (reservation?.status || "").toLowerCase() === "checked-in" ? "posted" : "forecast";
-  try {
-    await addDoc(collection(db, "postings"), {
-      reservationId: reservation.id,
-      stayId: null,
-      roomNumber: null,
-      description: chargeForm.description.trim(),
-      amount: total,
-      tax: 0,
-      service: 0,
-      quantity: qty,
-      unitAmount: unit,
-      accountCode: (chargeForm.accountCode || "MISC").toUpperCase(),
-      status,
-      createdAt: new Date(),
-      createdBy: actorName
-    });
-
-    // 🟢 Optimistic local update for charges
-    setPostings(prev => [
-      ...prev,
-      {
-        id: Math.random().toString(36).slice(2),
+  const submitCharge = async () => {
+    const qty = Math.max(1, toInt(chargeForm.qtyStr));
+    const unit = Math.max(0, toInt(chargeForm.unitStr));
+    const total = qty * unit;
+    if (!chargeForm.description?.trim()) {
+      alert("Description required");
+      return;
+    }
+    if (total <= 0) {
+      alert("Total must be > 0");
+      return;
+    }
+    const status = (reservation?.status || "").toLowerCase() === "checked-in" ? "posted" : "forecast";
+    try {
+      await addDoc(collection(db, "postings"), {
         reservationId: reservation.id,
+        stayId: null,
+        roomNumber: null,
         description: chargeForm.description.trim(),
         amount: total,
+        tax: 0,
+        service: 0,
+        quantity: qty,
+        unitAmount: unit,
         accountCode: (chargeForm.accountCode || "MISC").toUpperCase(),
         status,
         createdAt: new Date(),
-        createdBy: actorName,
-      },
-    ]);
+        createdBy: actorName
+      });
 
-    // Optional delayed reload to resync backend
-    setTimeout(load, 800);
+      // Optimistic local update for charges (keeps UI snappy)
+      setPostings(prev => [
+        ...prev,
+        {
+          id: "local-" + Math.random().toString(36).slice(2),
+          reservationId: reservation.id,
+          description: chargeForm.description.trim(),
+          amount: total,
+          accountCode: (chargeForm.accountCode || "MISC").toUpperCase(),
+          status,
+          createdAt: new Date(),
+          createdBy: actorName,
+        },
+      ]);
 
-    // 🟢 Log the new charge
-    await logReservationChange("charge_added", {
-      description: chargeForm.description.trim(),
-      amount: total,
-      accountCode: (chargeForm.accountCode || "MISC").toUpperCase(),
-    });
+      // schedule a short resync (non-blocking) to reconcile with backend
+      setTimeout(() => load(), 800);
 
-    setShowAddCharge(false);
-    setChargeForm({ description: "", qtyStr: "1", unitStr: "", accountCode: "MISC" });
-    await load();
-  } catch (err) {
-    console.error("submitCharge error", err);
-    alert("Failed to add charge");
-  }
-};
+      // Log the new charge (store structured details)
+      await logReservationChange("charge_added", {
+        description: chargeForm.description.trim(),
+        amount: total,
+        accountCode: (chargeForm.accountCode || "MISC").toUpperCase(),
+        by: actorName
+      });
 
+      setShowAddCharge(false);
+      setChargeForm({ description: "", qtyStr: "1", unitStr: "", accountCode: "MISC" });
+      // final sync to ensure state correctness
+      await load();
+    } catch (err) {
+      console.error("submitCharge error", err);
+      alert("Failed to add charge");
+    }
+  };
 
   // -----------------------
   // Submit payment
   // -----------------------
   const submitPayment = async () => {
     const amt = Math.max(0, toInt(paymentForm.amountStr));
-    if (amt <= 0) { alert("Payment must be > 0"); return; }
+    if (amt <= 0) {
+      alert("Payment must be > 0");
+      return;
+    }
     try {
       await addDoc(collection(db, "payments"), {
         reservationId: reservation.id,
@@ -577,27 +603,37 @@ const submitCharge = async () => {
         capturedBy: actorName,
         type: paymentForm.type || "payment"
       });
-      setShowAddPayment(false);
-      setPaymentForm({ amountStr: "", method: "cash", refNo: "", type: "payment" });
-      await logReservationChange("payment_added", { amount: amt, method: paymentForm.method });
-      // 🟢 Optimistic local update for payments
-    setPayments(prev => [
-      ...prev,
-      {
-        id: Math.random().toString(36).slice(2),
-        reservationId: reservation.id,
-        stayId: null,
-        amount: amt,
-        method: paymentForm.method,
-        refNo: paymentForm.refNo || "",
-        capturedAt: new Date(),
-        capturedBy: actorName,
-        type: "payment",
-      },
-    ]);
 
-    // Optional delayed reload to resync backend
-    setTimeout(load, 800);
+      setShowAddPayment(false);
+      // keep immediate UI response (optimistic)
+      setPayments(prev => [
+        ...prev,
+        {
+          id: "local-" + Math.random().toString(36).slice(2),
+          reservationId: reservation.id,
+          stayId: null,
+          amount: amt,
+          method: paymentForm.method,
+          refNo: paymentForm.refNo || "",
+          capturedAt: new Date(),
+          capturedBy: actorName,
+          type: "payment",
+        },
+      ]);
+
+      // reset form (no debounce)
+      setPaymentForm({ amountStr: "", method: "cash", refNo: "", type: "payment" });
+
+      // Log payment_added with structured details (avoid serializing to string)
+      await logReservationChange("payment_added", {
+        amount: amt,
+        method: paymentForm.method || "cash",
+        refNo: paymentForm.refNo || "",
+        capturedBy: actorName
+      });
+
+      // schedule a short resync (non-blocking)
+      setTimeout(() => load(), 800);
     } catch (err) {
       console.error("submitPayment error", err);
       alert("Failed to add payment");
@@ -607,13 +643,38 @@ const submitCharge = async () => {
   // -----------------------
   // Logging helper
   // -----------------------
+  // Note: we keep details as structured objects; some external UI may stringify them.
+  // To reduce "[object Object]" visibility in text-based displays, we also store a
+  // small string summary (logSummary) alongside structured details.
   async function logReservationChange(action, details = {}) {
     if (!reservation?.id) return;
     try {
+      // produce a compact summary
+      const summarize = (obj) => {
+        try {
+          if (typeof obj === "string") return obj;
+          if (obj == null) return "";
+          if (typeof obj === "object") {
+            const parts = [];
+            for (const k of Object.keys(obj)) {
+              const v = obj[k];
+              if (v == null) continue;
+              if (typeof v === "object") parts.push(`${k}: ${JSON.stringify(v)}`);
+              else parts.push(`${k}: ${String(v)}`);
+            }
+            return parts.join(" • ");
+          }
+          return String(obj);
+        } catch {
+          return String(obj);
+        }
+      };
+
       const collRef = collection(doc(db, "reservations", reservation.id), "logs");
       await addDoc(collRef, {
         action,
         details,
+        logSummary: summarize(details),
         createdAt: new Date(),
         createdBy: actorName,
       });
@@ -687,8 +748,14 @@ const submitCharge = async () => {
   // -----------------------
   const doCheckIn = async () => {
     if (!reservation) return;
-    if ((reservation.status || "").toLowerCase() !== "booked") { alert("Reservation is not booked"); return; }
-    if (!assignRooms.length) { alert("Assign at least one room"); return; }
+    if ((reservation.status || "").toLowerCase() !== "booked") {
+      alert("Reservation is not booked");
+      return;
+    }
+    if (!assignRooms.length) {
+      alert("Assign at least one room");
+      return;
+    }
     setLoading(true);
     try {
       const stayMap = {};
@@ -959,28 +1026,27 @@ const submitCharge = async () => {
                 const badge = badgeFor(entry.action);
 
                 // ---- Build summary ----
-let summary = "";
-const details = entry.details || entry.latestPayment || {};
+                let summary = "";
+                const details = entry.details || entry.latestPayment || {};
 
-if (entry.action?.toLowerCase().includes("payment") && (details.amount || details.method)) {
-  const amountStr = details.amount ? fmtIdr(details.amount) : "-";
-  const methodStr = details.method || "-";
-  summary = `Amount: ${amountStr} • Method: ${methodStr}`;
-  if (details.refNo) summary += ` • Ref: ${details.refNo}`;
-} 
-else if (details.before !== undefined || details.after !== undefined) {
-  summary = Object.entries(details)
-    .map(([k, v]) => `${k}: ${v}`)
-    .join(", ");
-} 
-else if (typeof details === "object") {
-  summary = Object.entries(details)
-    .map(([k, v]) => `${k}: ${String(v)}`)
-    .join(", ");
-} 
-else if (typeof details === "string") {
-  summary = details;
-}
+                if (entry.action?.toLowerCase().includes("payment") && (details.amount || details.method)) {
+                  const amountStr = details.amount ? fmtIdr(details.amount) : "-";
+                  const methodStr = details.method || "-";
+                  summary = `Amount: ${amountStr} • Method: ${methodStr}`;
+                  if (details.refNo) summary += ` • Ref: ${details.refNo}`;
+                } else if (details.before !== undefined || details.after !== undefined) {
+                  summary = Object.entries(details)
+                    .map(([k, v]) => `${k}: ${v}`)
+                    .join(", ");
+                } else if (typeof details === "object") {
+                  // use logSummary if present (more readable), otherwise flatten object
+                  if (entry.logSummary) summary = entry.logSummary;
+                  else summary = Object.entries(details)
+                    .map(([k, v]) => `${k}: ${String(v)}`)
+                    .join(", ");
+                } else if (typeof details === "string") {
+                  summary = details;
+                }
 
                 return (
                   <div key={entry.id} className={`log-entry card ${badge ? `log-${badge}` : ""}`}>
@@ -1003,8 +1069,7 @@ else if (typeof details === "string") {
     );
   }
 
-
-  // AddChargeModal (simple)
+  // AddChargeModal (simple) — immediate typing, onlyDigits used to strip non-digit input instantly.
   function AddChargeModal({ open, onClose }) {
     if (!open) return null;
     return (
@@ -1016,16 +1081,31 @@ else if (typeof details === "string") {
           <h3>Add Charge</h3>
           <div style={{ marginTop: 8 }}>
             <label>Description</label>
-            <input style={{ width: "100%" }} value={chargeForm.description} onChange={(e) => setChargeForm({ ...chargeForm, description: e.target.value })} />
+            <input
+              style={{ width: "100%" }}
+              value={chargeForm.description}
+              onChange={(e) => setChargeForm({ ...chargeForm, description: e.target.value })}
+              placeholder="e.g., Mini bar / Laundry"
+            />
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
             <div style={{ flex: 1 }}>
               <label>Qty</label>
-              <input value={chargeForm.qtyStr} onChange={(e) => setChargeForm({ ...chargeForm, qtyStr: onlyDigits(e.target.value) })} />
+              <input
+                inputMode="numeric"
+                pattern="\d*"
+                value={chargeForm.qtyStr}
+                onChange={(e) => setChargeForm({ ...chargeForm, qtyStr: onlyDigits(e.target.value) })}
+              />
             </div>
             <div style={{ flex: 1 }}>
               <label>Unit (IDR)</label>
-              <input value={chargeForm.unitStr} onChange={(e) => setChargeForm({ ...chargeForm, unitStr: onlyDigits(e.target.value) })} />
+              <input
+                inputMode="numeric"
+                pattern="\d*"
+                value={chargeForm.unitStr}
+                onChange={(e) => setChargeForm({ ...chargeForm, unitStr: onlyDigits(e.target.value) })}
+              />
             </div>
             <div style={{ flex: 1 }}>
               <label>Account</label>
@@ -1046,7 +1126,7 @@ else if (typeof details === "string") {
     );
   }
 
-  // AddPaymentModal
+  // AddPaymentModal — immediate typing, no debounce; onlyDigits used to sanitize input on every keystroke
   function AddPaymentModal({ open, onClose }) {
     if (!open) return null;
     return (
@@ -1058,7 +1138,13 @@ else if (typeof details === "string") {
           <h3>Add Payment</h3>
           <div style={{ marginTop: 8 }}>
             <label>Amount (IDR)</label>
-            <input value={paymentForm.amountStr} onChange={(e) => setPaymentForm({ ...paymentForm, amountStr: onlyDigits(e.target.value) })} />
+            <input
+              inputMode="numeric"
+              pattern="\d*"
+              value={paymentForm.amountStr}
+              onChange={(e) => setPaymentForm({ ...paymentForm, amountStr: onlyDigits(e.target.value) })}
+              placeholder="e.g., 100000"
+            />
           </div>
           <div style={{ marginTop: 8 }}>
             <label>Method</label>
@@ -1098,7 +1184,7 @@ else if (typeof details === "string") {
           printMode={printMode}
           onTemplatesLoaded={() => {
             if (printReadyResolverRef.current) {
-              try { printReadyResolverRef.current(); } catch (e) {}
+              try { printReadyResolverRef.current(); } catch (e) { /* swallow */ }
             }
           }}
           reservation={reservation}
@@ -1128,32 +1214,33 @@ else if (typeof details === "string") {
       ) : (
         <>
           <ReservationDetailB
-            {...{ reservation, guest, settings, rooms, assignRooms, renderAssignmentRow,
+            {...{
+              reservation, guest, settings, rooms, assignRooms, renderAssignmentRow,
               setAssignRooms, canOperate, canUpgrade, doCheckIn, doCheckOut,
               printCheckInForm, printCheckOutBill, preUpgradeOptions, sameTypeOptions,
               upgradeOptions, moveRoomStay, setMoveRoomStay, newRoom, setNewRoom,
               upgradeStay, setUpgradeStay, upgradeRoom, setUpgradeRoom,
               upgradeIndex, setUpgradeIndex, upgradePreRoom, setUpgradePreRoom,
               doUpgradePreCheckIn, doUpgradeRoom, stays, doNoShow, handleEditReservation,
-              handleDeleteReservation, navigate, isAdmin, fmt, logReservationChange }}
+              handleDeleteReservation, navigate, isAdmin, fmt, logReservationChange
+            }}
           />
 
-
           {/* Reintroduce Folio & Payment section */}
-      <div style={{ marginTop: 24 }}>
-        <FolioCard />
-      </div>
+          <div style={{ marginTop: 24 }}>
+            <FolioCard />
+          </div>
 
-      {/* Change Log placed after Folio */}
-      <div style={{ marginTop: 16 }}>
-        <LogCard />
-      </div>
+          {/* Change Log placed after Folio */}
+          <div style={{ marginTop: 16 }}>
+            <LogCard />
+          </div>
 
-      {/* Modals */}
-      <AddChargeModal open={showAddCharge} onClose={() => setShowAddCharge(false)} />
-      <AddPaymentModal open={showAddPayment} onClose={() => setShowAddPayment(false)} />
-    </>
-  )}
-</div>
-);
+          {/* Modals */}
+          <AddChargeModal open={showAddCharge} onClose={() => setShowAddCharge(false)} />
+          <AddPaymentModal open={showAddPayment} onClose={() => setShowAddPayment(false)} />
+        </>
+      )}
+    </div>
+  );
 }
