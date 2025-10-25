@@ -498,67 +498,94 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
     return () => unsub();
   }, [reservation?.id]);
 
-  // -----------------------
-  // Submit charge
-  // -----------------------
-  const submitCharge = async () => {
-    const qty = Math.max(1, toInt(chargeForm.qtyStr));
-    const unit = Math.max(0, toInt(chargeForm.unitStr));
-    const total = qty * unit;
-    if (!chargeForm.description?.trim()) { alert("Description required"); return; }
-    if (total <= 0) { alert("Total must be > 0"); return; }
-    const status = (reservation?.status || "").toLowerCase() === "checked-in" ? "posted" : "forecast";
-    try {
-      await addDoc(collection(db, "postings"), {
-        reservationId: reservation.id,
-        stayId: null,
-        roomNumber: null,
-        description: chargeForm.description.trim(),
-        amount: total,
-        tax: 0,
-        service: 0,
-        quantity: qty,
-        unitAmount: unit,
-        accountCode: (chargeForm.accountCode || "MISC").toUpperCase(),
-        status,
-        createdAt: new Date(),
-        createdBy: actorName
-      });
-      setShowAddCharge(false);
-      setChargeForm({ description: "", qtyStr: "1", unitStr: "", accountCode: "MISC" });
-      await load();
-    } catch (err) {
-      console.error("submitCharge error", err);
-      alert("Failed to add charge");
-    }
+// -----------------------
+// Submit charge (instant)
+// -----------------------
+const submitCharge = async () => {
+  const qty = Math.max(1, toInt(chargeForm.qtyStr));
+  const unit = Math.max(0, toInt(chargeForm.unitStr));
+  const total = qty * unit;
+  if (!chargeForm.description?.trim()) { alert("Description required"); return; }
+  if (total <= 0) { alert("Total must be > 0"); return; }
+
+  const status = (reservation?.status || "").toLowerCase() === "checked-in" ? "posted" : "forecast";
+  const newCharge = {
+    id: "temp_" + Date.now(),
+    reservationId: reservation.id,
+    stayId: null,
+    roomNumber: null,
+    description: chargeForm.description.trim(),
+    amount: total,
+    tax: 0,
+    service: 0,
+    quantity: qty,
+    unitAmount: unit,
+    accountCode: (chargeForm.accountCode || "MISC").toUpperCase(),
+    status,
+    createdAt: new Date(),
+    createdBy: actorName,
   };
 
-  // -----------------------
-  // Submit payment
-  // -----------------------
-  const submitPayment = async () => {
-    const amt = Math.max(0, toInt(paymentForm.amountStr));
-    if (amt <= 0) { alert("Payment must be > 0"); return; }
-    try {
-      await addDoc(collection(db, "payments"), {
-        reservationId: reservation.id,
-        stayId: null,
-        method: paymentForm.method || "cash",
-        amount: amt,
-        refNo: paymentForm.refNo || "",
-        capturedAt: new Date(),
-        capturedBy: actorName,
-        type: paymentForm.type || "payment"
-      });
-      setShowAddPayment(false);
-      setPaymentForm({ amountStr: "", method: "cash", refNo: "", type: "payment" });
-      await logReservationChange("payment_added", { amount: amt, method: paymentForm.method });
-      await load();
-    } catch (err) {
-      console.error("submitPayment error", err);
-      alert("Failed to add payment");
-    }
+  // ✅ Optimistic update
+  setPostings(prev => [...prev, newCharge]);
+  setShowAddCharge(false);
+  setChargeForm({ description: "", qtyStr: "1", unitStr: "", accountCode: "MISC" });
+
+  try {
+    await addDoc(collection(db, "postings"), newCharge);
+    await logReservationChange("charge_added", {
+      description: newCharge.description,
+      amount: total,
+      accountCode: newCharge.accountCode,
+    });
+  } catch (err) {
+    console.error("submitCharge error", err);
+    alert("Failed to add charge");
+    // rollback optimistic
+    setPostings(prev => prev.filter(p => p.id !== newCharge.id));
+  }
+};
+
+
+// -----------------------
+// Submit payment (instant)
+// -----------------------
+const submitPayment = async () => {
+  const amt = Math.max(0, toInt(paymentForm.amountStr));
+  if (amt <= 0) { alert("Payment must be > 0"); return; }
+
+  const newPayment = {
+    id: "temp_" + Date.now(),
+    reservationId: reservation.id,
+    stayId: null,
+    method: paymentForm.method || "cash",
+    amount: amt,
+    refNo: paymentForm.refNo || "",
+    capturedAt: new Date(),
+    capturedBy: actorName,
+    type: paymentForm.type || "payment",
   };
+
+  // ✅ Optimistic update (instant display)
+  setPayments(prev => [...prev, newPayment]);
+  setShowAddPayment(false);
+  setPaymentForm({ amountStr: "", method: "cash", refNo: "", type: "payment" });
+
+  try {
+    await addDoc(collection(db, "payments"), newPayment);
+    await logReservationChange("payment_added", {
+      amount: amt,
+      method: paymentForm.method,
+      refNo: paymentForm.refNo || "",
+    });
+  } catch (err) {
+    console.error("submitPayment error", err);
+    alert("Failed to add payment");
+    // rollback optimistic
+    setPayments(prev => prev.filter(p => p.id !== newPayment.id));
+  }
+};
+
 
   // -----------------------
   // Logging helper
