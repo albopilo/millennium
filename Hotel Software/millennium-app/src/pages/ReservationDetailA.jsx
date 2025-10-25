@@ -1152,86 +1152,177 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
   }
 
   // ---------- Add Charge Modal (no debounce) ----------
-  function AddChargeModal({ open, onClose }) {
-    if (!open) return null;
-    return (
-      <div style={{ position: "fixed", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.4)", zIndex: 1200 }}>
-        <div style={{ width: 520, maxWidth: "95%", background: "#fff", borderRadius: 8, padding: 16 }}>
-          <h3>Add Charge</h3>
+  // ---------- Add Charge Modal (ZERO re-render lag) ----------
+function AddChargeModal({ open, onClose }) {
+  const descRef = useRef();
+  const qtyRef = useRef();
+  const unitRef = useRef();
+  const accountRef = useRef();
 
-          <div style={{ marginTop: 8 }}>
-            <label>Description</label>
-            <input
-              style={{ width: "100%" }}
-              value={chargeForm.description}
-              onChange={(e) => setChargeForm((s) => ({ ...s, description: e.target.value }))}
-            />
-          </div>
+  if (!open) return null;
 
-          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-            <div style={{ flex: 1 }}>
-              <label>Qty</label>
-              <input value={chargeForm.qtyStr} onChange={(e) => setChargeForm((s) => ({ ...s, qtyStr: onlyDigits(e.target.value) }))} />
-            </div>
-            <div style={{ flex: 1 }}>
-              <label>Unit (IDR)</label>
-              <input value={chargeForm.unitStr} onChange={(e) => setChargeForm((s) => ({ ...s, unitStr: onlyDigits(e.target.value) }))} />
-            </div>
-            <div style={{ flex: 1 }}>
-              <label>Account</label>
-              <select value={chargeForm.accountCode} onChange={(e) => setChargeForm((s) => ({ ...s, accountCode: e.target.value }))}>
-                <option value="MISC">MISC</option>
-                <option value="ROOM">ROOM</option>
-                <option value="DEPOSIT">DEPOSIT</option>
-              </select>
-            </div>
-          </div>
+  async function handleSubmit() {
+    const description = descRef.current.value.trim();
+    const qty = parseInt(qtyRef.current.value.replace(/\D/g, ""), 10) || 1;
+    const unit = parseInt(unitRef.current.value.replace(/\D/g, ""), 10) || 0;
+    const accountCode = accountRef.current.value || "MISC";
+    const total = qty * unit;
 
-          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
-            <button onClick={onClose}>Cancel</button>
-            <button onClick={submitCharge} className="btn btn-primary">
-              Save Charge
-            </button>
-          </div>
-        </div>
-      </div>
-    );
+    if (!description) return alert("Description required");
+    if (total <= 0) return alert("Total must be > 0");
+
+    const status = (reservation?.status || "").toLowerCase() === "checked-in" ? "posted" : "forecast";
+    const optimistic = {
+      id: `temp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      reservationId: reservation.id,
+      description,
+      amount: total,
+      quantity: qty,
+      unitAmount: unit,
+      accountCode,
+      status,
+      createdAt: new Date(),
+      createdBy: actorName,
+    };
+
+    // optimistic UI
+    setPostings((prev) => [...(prev || []), optimistic]);
+    onClose();
+
+    try {
+      await addDoc(collection(db, "postings"), {
+        reservationId: reservation.id,
+        description,
+        amount: total,
+        quantity: qty,
+        unitAmount: unit,
+        accountCode,
+        status,
+        createdAt: new Date(),
+        createdBy: actorName,
+      });
+      await logReservationChange("charge_added", { description, amount: total, accountCode });
+    } catch (err) {
+      console.error("submitCharge error", err);
+      alert("Failed to add charge");
+      setPostings((prev) => (prev || []).filter((p) => p.id !== optimistic.id));
+    }
   }
 
-  // ---------- Add Payment Modal (no debounce) ----------
-  function AddPaymentModal({ open, onClose }) {
-    if (!open) return null;
-    return (
-      <div style={{ position: "fixed", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.4)", zIndex: 1200 }}>
-        <div style={{ width: 420, maxWidth: "95%", background: "#fff", borderRadius: 8, padding: 16 }}>
-          <h3>Add Payment</h3>
-          <div style={{ marginTop: 8 }}>
-            <label>Amount (IDR)</label>
-            <input value={paymentForm.amountStr} onChange={(e) => setPaymentForm((s) => ({ ...s, amountStr: onlyDigits(e.target.value) }))} />
+  return (
+    <div className="modal-overlay">
+      <div className="modal-box">
+        <h3>Add Charge</h3>
+
+        <div>
+          <label>Description</label>
+          <input ref={descRef} defaultValue="" />
+        </div>
+
+        <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ flex: 1 }}>
+            <label>Qty</label>
+            <input ref={qtyRef} defaultValue="1" />
           </div>
-          <div style={{ marginTop: 8 }}>
-            <label>Method</label>
-            <select value={paymentForm.method} onChange={(e) => setPaymentForm((s) => ({ ...s, method: e.target.value }))}>
-              <option value="cash">Cash</option>
-              <option value="card">Card</option>
-              <option value="bank">Bank</option>
+          <div style={{ flex: 1 }}>
+            <label>Unit (IDR)</label>
+            <input ref={unitRef} defaultValue="" />
+          </div>
+          <div style={{ flex: 1 }}>
+            <label>Account</label>
+            <select ref={accountRef} defaultValue="MISC">
+              <option value="MISC">MISC</option>
+              <option value="ROOM">ROOM</option>
+              <option value="DEPOSIT">DEPOSIT</option>
             </select>
           </div>
-          <div style={{ marginTop: 8 }}>
-            <label>Reference No</label>
-            <input value={paymentForm.refNo} onChange={(e) => setPaymentForm((s) => ({ ...s, refNo: e.target.value }))} />
-          </div>
+        </div>
 
-          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
-            <button onClick={onClose}>Cancel</button>
-            <button onClick={submitPayment} className="btn btn-primary">
-              Save Payment
-            </button>
-          </div>
+        <div className="modal-footer">
+          <button onClick={onClose}>Cancel</button>
+          <button onClick={handleSubmit} className="btn btn-primary">Save Charge</button>
         </div>
       </div>
-    );
+    </div>
+  );
+}
+
+// ---------- Add Payment Modal (ZERO re-render lag) ----------
+function AddPaymentModal({ open, onClose }) {
+  const amountRef = useRef();
+  const methodRef = useRef();
+  const refNoRef = useRef();
+
+  if (!open) return null;
+
+  async function handleSubmit() {
+    const amt = parseInt(amountRef.current.value.replace(/\D/g, ""), 10) || 0;
+    const method = methodRef.current.value || "cash";
+    const refNo = refNoRef.current.value.trim();
+
+    if (amt <= 0) return alert("Payment must be > 0");
+
+    const optimistic = {
+      id: `temp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      reservationId: reservation.id,
+      amount: amt,
+      method,
+      refNo,
+      capturedAt: new Date(),
+      capturedBy: actorName,
+    };
+
+    setPayments((prev) => [...(prev || []), optimistic]);
+    onClose();
+
+    try {
+      await addDoc(collection(db, "payments"), {
+        reservationId: reservation.id,
+        amount: amt,
+        method,
+        refNo,
+        capturedAt: new Date(),
+        capturedBy: actorName,
+      });
+      await logReservationChange("payment_added", { amount: amt, method, refNo });
+    } catch (err) {
+      console.error("submitPayment error", err);
+      alert("Failed to add payment");
+      setPayments((prev) => (prev || []).filter((p) => p.id !== optimistic.id));
+    }
   }
+
+  return (
+    <div className="modal-overlay">
+      <div className="modal-box">
+        <h3>Add Payment</h3>
+
+        <div>
+          <label>Amount (IDR)</label>
+          <input ref={amountRef} defaultValue="" />
+        </div>
+        <div>
+          <label>Method</label>
+          <select ref={methodRef} defaultValue="cash">
+            <option value="cash">Cash</option>
+            <option value="card">Card</option>
+            <option value="bank">Bank</option>
+          </select>
+        </div>
+        <div>
+          <label>Reference No</label>
+          <input ref={refNoRef} defaultValue="" />
+        </div>
+
+        <div className="modal-footer">
+          <button onClick={onClose}>Cancel</button>
+          <button onClick={handleSubmit} className="btn btn-primary">Save Payment</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 
   // ---------- Render ----------
   if (loading || !reservation) {
