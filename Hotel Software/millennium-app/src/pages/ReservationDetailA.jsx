@@ -479,7 +479,7 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
     }
   };
 
-    // --- Log reservation change ---
+  // --- Log reservation change ---
   async function logReservationChange(action, details = {}) {
     if (!reservation?.id) return;
     try {
@@ -510,6 +510,7 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
     }
   }
 
+
   // --- Delete reservation ---
   async function handleDeleteReservation() {
     if (!reservation?.id) return;
@@ -530,6 +531,29 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
   }
 
   // --- No Show handler ---
+  async function doNoShow() {
+    if (!reservation?.id) return;
+    if ((reservation.status || "").toLowerCase() !== "booked") {
+      alert("Only booked reservations can be marked as No Show");
+      return;
+    }
+    if (!window.confirm("Mark this reservation as No Show?")) return;
+    try {
+      await updateDoc(doc(db, "reservations", reservation.id), {
+        status: "no-show",
+        noShowAt: new Date(),
+        updatedBy: actorName,
+      });
+      await logReservationChange("no-show", { previousStatus: reservation.status });
+      alert("Marked as No Show");
+      await load();
+    } catch (err) {
+      console.error("No show failed", err);
+      alert("Failed to mark as No Show");
+    }
+  }
+
+   // --- No Show handler ---
   async function doNoShow() {
     if (!reservation?.id) return;
     if ((reservation.status || "").toLowerCase() !== "booked") {
@@ -745,6 +769,7 @@ const fmt = (raw) => {
         if (reservation.status === "checked-in") logReservationChange("check_in", {});
         if (reservation.status === "checked-out") logReservationChange("check_out", {});
       }, [reservation?.status]);
+
 
       {/* Remove duplicated folio component */}
 
