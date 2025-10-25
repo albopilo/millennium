@@ -1,374 +1,873 @@
-// src/pages/FrontDeskCheckIn.jsx
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import { collection, getDocs, query, where, onSnapshot } from "firebase/firestore";
+// src/pages/ReservationDetailA.jsx
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useParams, useNavigate } from "react-router-dom";
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  query,
+  where,
+  runTransaction,
+  addDoc,
+  updateDoc,
+  setDoc,
+  onSnapshot,
+  orderBy
+} from "firebase/firestore";
 import { db } from "../firebase";
-import { startOfDayStr, endOfDayStr, todayStr, fmt, ymd } from "../lib/dates";
-import useRequireNightAudit from "../hooks/useRequireNightAudit";
+import ReservationDetailB from "./ReservationDetailB";
+import ReservationDetailC from "./ReservationDetailC";
 
 /**
- * FrontDeskCheckIn
+ * Controller that preserves original logic:
+ * - loads reservation and related data
+ * - createForecastRoomPostings / ensureDepositPosting / convertForecastsToPosted
+ * - submitCharge / submitPayment
+ * - doCheckIn / doCheckOut
  *
- * Responsibilities (kept intact):
- *  - list arrivals (reservations with status === "booked") for a selected date
- *  - support both timestamp-based checkInDate (range query) and string-based checkInDate (equality)
- *  - provide search across guestName / resNo / id / roomNumbers
- *  - show room status badges (Occupied, Vacant Dirty, Vacant Clean, OOO)
- *  - enforce Night Audit (useRequireNightAudit(7)) before allowing operations
- *
- * Enhancements (non-destructive):
- *  - request token to avoid race conditions
- *  - mounted ref to prevent state updates after unmount
- *  - realtime subscription for rooms (keeps getDocs approach so no logic removed)
- *  - retry button on error
+ * This rewrite keeps all functions and logic but cleans up:
+ * - defensive printing guards
+ * - no input debounce for numeric typing (we parse numbers on submit)
+ * - improved UI hooks (pass formatted previews)
  */
 
-export default function FrontDeskCheckIn({ permissions = [] }) {
+export default function ReservationDetailA({ permissions = [], currentUser = null, userData = null }) {
+  const { id } = useParams();
   const navigate = useNavigate();
+  const actorName = currentUser?.displayName || currentUser?.email || "frontdesk";
 
-  // permission helper (keeps original behavior)
-  const can = useCallback((perm) => permissions.includes(perm) || permissions.includes("*"), [permissions]);
+  // permissions
+  const can = (p) => permissions.includes(p) || permissions.includes("*");
+  const canOperate = can("canOperateFrontDesk") || can("canEditReservations");
+  const canUpgrade = can("canUpgradeRoom") || can("canOverrideRoomType");
+  const canOverrideBilling = can("canOverrideBilling");
+  const isAdmin = userData?.roleId === "admin";
 
-  // --- UI state (kept) ---
-  const [date, setDate] = useState(todayStr());
-  const [search, setSearch] = useState("");
-  const [arrivals, setArrivals] = useState([]);
+  // state
+  const [reservation, setReservation] = useState(null);
   const [rooms, setRooms] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const [stays, setStays] = useState([]);
+  const [postings, setPostings] = useState([]);
+  const [payments, setPayments] = useState([]);
+  const [rates, setRates] = useState([]);
+  const [events, setEvents] = useState([]);
+  const [channels, setChannels] = useState([]);
+  const [guest, setGuest] = useState(null);
+  const [settings, setSettings] = useState({ currency: "IDR", depositPerRoom: 0 });
+  const [logs, setLogs] = useState([]);
+  const [loading, setLoading] = useState(false);
 
-  // night audit requirement (kept)
-  const { ready } = useRequireNightAudit(7);
+  // UI
+  const [assignRooms, setAssignRooms] = useState([]);
+  const [showAddCharge, setShowAddCharge] = useState(false);
+  const [chargeForm, setChargeForm] = useState({ description: "", qtyStr: "1", unitStr: "", accountCode: "MISC" });
+  const [showAddPayment, setShowAddPayment] = useState(false);
+  const [paymentForm, setPaymentForm] = useState({ amountStr: "", method: "cash", refNo: "", type: "payment" });
 
-  // --- debounce search (kept semantics) ---
-  const [debouncedSearch, setDebouncedSearch] = useState("");
-  useEffect(() => {
-    const handler = setTimeout(() => setDebouncedSearch((search || "").trim().toLowerCase()), 400);
-    return () => clearTimeout(handler);
-  }, [search]);
+  // print
+  const printRef = useRef(null);
+  const [printMode, setPrintMode] = useState(null);
 
-  // mounted guard + request token to avoid race conditions
-  const mountedRef = useRef(true);
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => { mountedRef.current = false; };
-  }, []);
-
-  // request token increments each time load() is invoked; only the latest token may apply results
-  const reqTokenRef = useRef(0);
-
-  /**
-   * loadArrivals(selectedDate)
-   *
-   * Kept core logic:
-   *  - query reservations where status == 'booked' && checkInDate within timestamp range
-   *  - query reservations where status == 'booked' && checkInDate == selectedDate (string)
-   *  - combine, dedupe by id and filter out deleted
-   *
-   * Returns: Promise<Reservation[]>
-   */
-  const loadArrivals = useCallback(async (selectedDate) => {
-    const start = startOfDayStr(selectedDate);
-    const end = endOfDayStr(selectedDate);
-    const results = [];
-
-    // Attempt timestamp-range query (some records store checkInDate as timestamp)
-    try {
-      const qTs = query(
-        collection(db, "reservations"),
-        where("status", "==", "booked"),
-        where("checkInDate", ">=", start),
-        where("checkInDate", "<=", end)
-      );
-      const snapTs = await getDocs(qTs);
-      snapTs.forEach((d) => results.push({ id: d.id, ...d.data() }));
-    } catch (err) {
-      // preserve original behavior: log + user-visible error message
-      console.error("Error loading timestamp arrivals:", err);
-      // append to error; preserve other flows
-      // Do not throw — keep behavior as original but surface friendly message
-      throw new Error("Failed to load timestamp-based reservations.");
-    }
-
-    // Attempt string equality query (some records store checkInDate as YYYY-MM-DD string)
-    try {
-      const qStr = query(
-        collection(db, "reservations"),
-        where("status", "==", "booked"),
-        where("checkInDate", "==", selectedDate)
-      );
-      const snapStr = await getDocs(qStr);
-      snapStr.forEach((d) => results.push({ id: d.id, ...d.data() }));
-    } catch (err) {
-      console.error("Error loading string-date arrivals:", err);
-      throw new Error("Failed to load string-date reservations.");
-    }
-
-    // dedupe by id and exclude deleted
-    const seen = new Set();
-    const out = results.filter((r) => {
-      if (!r || !r.id) return false;
-      if (seen.has(r.id)) return false;
-      seen.add(r.id);
-      return (r.status || "").toLowerCase() !== "deleted";
-    });
-
-    return out;
-  }, []);
-
-  /**
-   * load()
-   *
-   * - increments req token
-   * - uses loadArrivals(date) (kept)
-   * - filters using debouncedSearch (kept logic)
-   * - sets arrivals and loads rooms via getDocs (kept)
-   * - sets loading & error states defensively
-   */
-  const load = useCallback(async () => {
-    const myToken = ++reqTokenRef.current; // capture token for this invocation
-    setLoading(true);
-    setError(null);
-
-    try {
-      const items = await loadArrivals(date);
-
-      // if component unmounted or a newer request has started, bail
-      if (!mountedRef.current || reqTokenRef.current !== myToken) return;
-
-      const filtered = debouncedSearch
-        ? items.filter((r) =>
-            [r.guestName, r.resNo, r.id, ...(Array.isArray(r.roomNumbers) ? r.roomNumbers : [r.roomNumber])]
-              .join(" ")
-              .toLowerCase()
-              .includes(debouncedSearch)
-          )
-        : items;
-
-      // Apply arrivals (kept)
-      setArrivals(filtered);
-
-      // Now load rooms collection (kept)
-      try {
-        const rSnap = await getDocs(collection(db, "rooms"));
-        if (!mountedRef.current || reqTokenRef.current !== myToken) return;
-        setRooms(rSnap.docs.map((d) => d.data() || {}));
-      } catch (err) {
-        // preserve behavior: log + set error but don't throw
-        console.error("Error loading rooms:", err);
-        if (mountedRef.current) setError("Failed to load room statuses.");
-      }
-    } catch (err) {
-      // loadArrivals throws stringified error messages above; keep user-facing error
-      console.error("Error loading arrivals:", err);
-      if (mountedRef.current) setError(err.message || "Failed to load arrivals.");
-    } finally {
-      if (mountedRef.current && reqTokenRef.current === myToken) setLoading(false);
-    }
-  }, [date, debouncedSearch, loadArrivals]);
-
-  // Auto load whenever ready flag or search/date changes
-  useEffect(() => {
-    if (!ready) return;
-    // call load; because load uses reqTokenRef it prevents race overwrite
-    load();
-  }, [ready, date, debouncedSearch, load]);
-
-  /**
-   * Real-time subscription for rooms (non-destructive)
-   * - original code used getDocs for rooms on each load()
-   * - we keep that call (so no behavior removed) but also subscribe once to rooms
-   * - subscription keeps room state up-to-date between loads without removing original logic
-   */
-  useEffect(() => {
-    const coll = collection(db, "rooms");
-    // onSnapshot returns unsubscribe
-    const unsub = onSnapshot(
-      coll,
-      (snap) => {
-        if (!mountedRef.current) return;
-        setRooms(snap.docs.map((d) => d.data() || {}));
-      },
-      (err) => {
-        console.warn("rooms onSnapshot error", err);
-        // do not fail hard — keep original logic's reliance on getDocs
-      }
-    );
-    return () => unsub();
-  }, []);
-
-  /**
-   * roomBadge(roomNumber)
-   *
-   * Kept mapping:
-   *  - Occupied -> OCC
-   *  - Vacant Dirty -> VD
-   *  - Vacant Clean -> VC
-   *  - OOO -> OOO
-   * Returns "roomNumber (TAG)" when tag present
-   */
-  const roomBadge = useCallback(
-    (roomNumber) => {
-      const rm = rooms.find((x) => x.roomNumber === roomNumber);
-      const st = rm?.status || "";
-      const tag =
-        st === "Occupied"
-          ? "OCC"
-          : st === "Vacant Dirty"
-          ? "VD"
-          : st === "Vacant Clean"
-          ? "VC"
-          : st === "OOO"
-          ? "OOO"
-          : "";
-      return `${roomNumber}${tag ? ` (${tag})` : ""}`;
-    },
-    [rooms]
-  );
-
-  const hasArrivals = arrivals.length > 0;
-
-  // Night Audit enforcement (kept early return)
-  if (!ready) {
-    return (
-      <div className="notice-box">
-        <h3>Night Audit Required</h3>
-        <p>
-          The Night Audit for this business day has not been completed.
-          Please complete Night Audit before performing check-in operations.
-        </p>
-        <button className="btn-primary" onClick={() => navigate("/night-audit")}>
-          Run Night Audit
-        </button>
-      </div>
-    );
+  // When printing we wait for the printable component to signal it's ready (templates loaded)
+  const printReadyResolverRef = useRef(null);
+  function createPrintReadyPromise() {
+    return new Promise((resolve) => { printReadyResolverRef.current = resolve; });
   }
 
-  // UI helpers
-  const handleKeySearch = (e) => {
-    if (e.key === "Enter") {
-      // pressing Enter triggers immediate update of debouncedSearch by updating `search` value is enough
-      // because effect above will debounce — we also trigger load immediately to be responsive
-      // keep logic intact but give UX improvement
-      load();
+  // defensive refs (prevent concurrent forecast creation)
+  const creatingForecastsRef = useRef(false);
+  const skippedZeroRateWarningsRef = useRef(new Set());
+
+  // helpers: parse free typing numeric inputs (no debounce)
+  const onlyDigits = (s) => (s || "").toString().replace(/[^\d]/g, "");
+  const toInt = (s) => {
+    const k = onlyDigits(s);
+    return k ? parseInt(k, 10) : 0;
+  };
+  const fmtIdr = (n) => `IDR ${Number(n || 0).toLocaleString("id-ID")}`;
+
+  // basic helpers
+  const statusOf = (p) => ((p?.status || "") + "").toLowerCase();
+  const acctOf = (p) => ((p?.accountCode || "") + "").toUpperCase();
+
+  // date helpers (small, compatible versions)
+  const datesInStay = (resObj) => {
+    if (!resObj?.checkInDate || !resObj?.checkOutDate) return [];
+    const a = resObj.checkInDate?.toDate ? resObj.checkInDate.toDate() : new Date(resObj.checkInDate);
+    const b = resObj.checkOutDate?.toDate ? resObj.checkOutDate.toDate() : new Date(resObj.checkOutDate);
+    const out = [];
+    const cur = new Date(a.getFullYear(), a.getMonth(), a.getDate());
+    while (cur < b) {
+      out.push(new Date(cur));
+      cur.setDate(cur.getDate() + 1);
+    }
+    return out;
+  };
+  const sameMonthDay = (d1, d2) => d1.getMonth() === d2.getMonth() && d1.getDate() === d2.getDate();
+
+  // rateFor — search rates collection then channels then room fallback
+  const rateFor = (roomType, channelName, date, roomDoc = null, channelList = null) => {
+    const normalize = (s) => (s || "").toString().trim().toLowerCase();
+    const channelId = normalize(channelName);
+    const rtype = (roomType || "").trim();
+
+    // 1) rates state
+    let rd = rates.find((r) => normalize(r.roomType) === normalize(rtype) && normalize(r.channelId) === channelId);
+    if (!rd) rd = rates.find((r) => normalize(r.roomType) === normalize(rtype));
+    if (rd) {
+      if (channelId === "direct") {
+        const day = date.getDay();
+        const weekend = day === 0 || day === 6;
+        return weekend ? Number(rd.weekendRate || 0) : Number(rd.weekdayRate || 0);
+      }
+      return Number(rd.price || rd.baseRate || rd.nightlyRate || 0);
+    }
+
+    // 2) channels fallback
+    const chList = channelList || channels || [];
+    const chDoc = chList.find((c) => (c.name || "").toString().trim().toLowerCase() === channelId);
+    if (chDoc) {
+      if (channelId === "direct") {
+        const day = date.getDay();
+        const weekend = day === 0 || day === 6;
+        const rateMap = weekend ? chDoc.weekendRate || {} : chDoc.weekdayRate || {};
+        const maybe = rateMap[roomType] ?? rateMap[rtype];
+        if (maybe != null && Number(maybe) > 0) return Number(maybe);
+      } else {
+        if (chDoc.price && Number(chDoc.price) > 0) return Number(chDoc.price);
+      }
+    }
+
+    // 3) roomDoc fallback
+    if (roomDoc) {
+      const fallbacks = ["defaultRate", "rates", "price", "baseRate", "nightlyRate", "roomRate"];
+      for (const k of fallbacks) {
+        if (roomDoc[k] != null && Number(roomDoc[k]) > 0) return Number(roomDoc[k]);
+      }
+    }
+
+    console.warn("rateFor: could not find rate", { roomType, channelName, date });
+    return 0;
+  };
+
+  // deposit normalization: ensures a single canonical deposit posting (reservationId + '_DEPOSIT')
+  async function ensureDepositPosting(resObj, assignedRooms = []) {
+    const depositPerRoom = Number(resObj.depositPerRoom ?? settings.depositPerRoom ?? 0);
+    const count = Array.isArray(assignedRooms) ? assignedRooms.length : 0;
+    const depositTotal = depositPerRoom * count;
+    if (depositTotal <= 0) return;
+
+    const pSnap = await getDocs(query(collection(db, "postings"), where("reservationId", "==", resObj.id)));
+    const existing = pSnap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((p) => (p.accountCode || "").toUpperCase() === "DEPOSIT");
+    const depositDocId = `${resObj.id}_DEPOSIT`;
+    const depositRef = doc(db, "postings", depositDocId);
+
+    if (existing.length > 0) {
+      const primary = existing.find((p) => p.id === depositDocId) || existing[0];
+      const desiredStatus = (resObj.status || "").toLowerCase() === "checked-in" ? "posted" : "forecast";
+      try {
+        await setDoc(depositRef, {
+          reservationId: resObj.id,
+          stayId: null,
+          roomNumber: null,
+          description: "Security Deposit",
+          amount: depositTotal,
+          tax: 0,
+          service: 0,
+          status: desiredStatus,
+          accountCode: "DEPOSIT",
+          createdAt: primary.createdAt || new Date(),
+          createdBy: primary.createdBy || actorName
+        }, { merge: true });
+      } catch (err) {
+        console.log("ensureDepositPosting: failed canonical set", err);
+      }
+
+      // void duplicates
+      for (const dup of existing) {
+        if (dup.id === depositDocId) continue;
+        try {
+          if ((dup.status || "").toLowerCase() !== "void") {
+            await updateDoc(doc(db, "postings", dup.id), { status: "void" });
+          }
+        } catch (err) {
+          console.log("ensureDepositPosting: void dup failed", dup.id, err);
+        }
+      }
+      return;
+    }
+
+    try {
+      await setDoc(depositRef, {
+        reservationId: resObj.id,
+        stayId: null,
+        roomNumber: null,
+        description: "Security Deposit",
+        amount: depositTotal,
+        tax: 0,
+        service: 0,
+        status: (resObj.status || "").toLowerCase() === "checked-in" ? "posted" : "forecast",
+        accountCode: "DEPOSIT",
+        createdAt: new Date(),
+        createdBy: actorName
+      });
+    } catch (err) {
+      console.log("ensureDepositPosting: create fail", err);
+    }
+  }
+
+  // create per-room-per-night forecast postings (keeps original logic)
+  const createForecastRoomPostings = async (resObj, assigned = [], g = null, allRooms = [], channelList = null) => {
+    if (!resObj) return;
+    if (creatingForecastsRef.current) return;
+    creatingForecastsRef.current = true;
+    try {
+      const nights = datesInStay(resObj);
+      const pct = (g && ((g.tier || "").toLowerCase() === "silver" ? 0.05 : (g.tier === "Gold" ? 0.10 : 0))) || 0;
+      const bday = g?.birthdate ? new Date(g.birthdate) : null;
+      const pSnapAll = await getDocs(query(collection(db, "postings"), where("reservationId", "==", resObj.id)));
+      const existingPostings = pSnapAll.docs.map((d) => ({ id: d.id, ...d.data() }));
+
+      const assignedDocs = (assigned || []).map((n) => allRooms.find((r) => r.roomNumber === n)).filter(Boolean);
+      const firstDeluxeAssigned = assignedDocs.find((r) => (r.roomType || "").toLowerCase() === "deluxe");
+      const year = new Date().getFullYear();
+      const alreadyClaimed = Number(g?.lastBirthdayClaimYear || 0) === year;
+      const applyBirthday = (resObj.channel || "").toLowerCase() === "direct" && bday && !alreadyClaimed;
+
+      for (let idx = 0; idx < (assigned || []).length; idx++) {
+        const roomNumber = assigned[idx];
+        const roomDoc = allRooms.find((r) => r.roomNumber === roomNumber);
+        if (!roomDoc) continue;
+
+        for (const dRaw of nights) {
+          const d = new Date(dRaw);
+          // compute base (events override or rateFor)
+          let base = 0;
+          const ev = events.find((ev) => {
+            const s = new Date(ev.startDate);
+            const e = new Date(ev.endDate);
+            return d >= s && d <= e;
+          });
+          if (ev && ev.rateType === "custom" && ev.customRates && ev.customRates[roomDoc.roomType] != null) {
+            base = Number(ev.customRates[roomDoc.roomType]);
+          } else {
+            base = rateFor(roomDoc.roomType, resObj.channel, d, roomDoc, channelList);
+          }
+
+          if (!base || base <= 0) {
+            const key = `${roomNumber}|${d.toISOString().slice(0, 10)}`;
+            if (!skippedZeroRateWarningsRef.current.has(key)) {
+              skippedZeroRateWarningsRef.current.add(key);
+              console.warn(`createForecastRoomPostings: skipping zero base rate for ${roomNumber} on ${d.toISOString()}`, { roomDoc, ev, base });
+            }
+            continue;
+          }
+
+          let net = Number(base) * (1 - pct);
+
+          if (applyBirthday && bday && sameMonthDay(d, bday)) {
+            if ((g?.tier || "").toLowerCase() === "silver") {
+              if (idx === 0) net -= Number(base) * 0.5;
+            } else if ((g?.tier || "").toLowerCase() === "gold") {
+              if ((roomDoc.roomType || "").toLowerCase() === "deluxe" && (!firstDeluxeAssigned || firstDeluxeAssigned.roomNumber === roomDoc.roomNumber)) {
+                net -= Number(base);
+              }
+            }
+            if (net < 0) net = 0;
+          }
+
+          const description = `Room charge ${roomDoc.roomType} ${d.toISOString().slice(0, 10)}`;
+
+          const alreadyExists = existingPostings.some((ep) => {
+            const sameAccount = (ep.accountCode || "").toUpperCase() === "ROOM";
+            const sameRoom = ep.roomNumber === roomNumber;
+            const sameDesc = ((ep.description || "") + "").trim().toLowerCase() === (description + "").trim().toLowerCase();
+            const sameStatus = ep.status === "forecast" || ep.status === "posted";
+            return sameAccount && sameRoom && sameDesc && sameStatus;
+          });
+          if (alreadyExists) continue;
+
+          try {
+            const ref = await addDoc(collection(db, "postings"), {
+              reservationId: resObj.id,
+              stayId: null,
+              roomNumber,
+              description,
+              amount: Math.round(net),
+              tax: 0,
+              service: 0,
+              status: "forecast",
+              accountCode: "ROOM",
+              createdAt: new Date(),
+              createdBy: actorName
+            });
+            existingPostings.push({ id: ref.id, reservationId: resObj.id, roomNumber, description, accountCode: "ROOM", status: "forecast", amount: Math.round(net) });
+          } catch (err) {
+            console.log("createForecastRoomPostings: addDoc failed", err);
+          }
+        }
+      }
+    } finally {
+      creatingForecastsRef.current = false;
     }
   };
 
-  const handleRetry = () => {
-    setError(null);
-    load();
+  // convert forecast postings to posted (used on check-in)
+  async function convertForecastsToPosted(stayMapByRoom = {}) {
+    const snap = await getDocs(query(collection(db, "postings"), where("reservationId", "==", reservation.id)));
+    const forecasts = snap.docs.filter(d => {
+      const p = d.data();
+      return p.status === "forecast" && (p.accountCode === "ROOM" || p.accountCode === "DEPOSIT");
+    });
+    for (const fdoc of forecasts) {
+      const pData = fdoc.data();
+      const stayId = pData.accountCode === "ROOM" ? (stayMapByRoom[pData.roomNumber] || null) : null;
+      try {
+        await updateDoc(doc(db, "postings", fdoc.id), { status: "posted", stayId });
+      } catch (err) {
+        console.log("convertForecastsToPosted: update failed", fdoc.id, err);
+      }
+    }
+  }
+
+  // load everything
+  const load = async () => {
+    setLoading(true);
+    try {
+      const [resSnap, roomsSnap, settingsSnap, ratesSnap, eventsSnap, channelsSnap] = await Promise.all([
+        getDoc(doc(db, "reservations", id)),
+        getDocs(collection(db, "rooms")),
+        getDoc(doc(db, "settings", "general")),
+        getDocs(collection(db, "rates")),
+        getDocs(collection(db, "events")),
+        getDocs(collection(db, "channels"))
+      ]);
+      if (!resSnap.exists()) {
+        navigate("/calendar");
+        return;
+      }
+      const res = { id: resSnap.id, ...resSnap.data() };
+      if ((res.status || "").toLowerCase() === "deleted") {
+        navigate("/calendar");
+        return;
+      }
+      setReservation(res);
+      setRooms(roomsSnap.docs.map(d => d.data()));
+      if (settingsSnap.exists()) setSettings(settingsSnap.data());
+      setRates(ratesSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+      setEvents(eventsSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+      setChannels(channelsSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+
+      const initialAssigned = Array.isArray(res.roomNumbers) ? [...res.roomNumbers] : (res.roomNumber ? [res.roomNumber] : []);
+      setAssignRooms(initialAssigned);
+
+      // guest lookup
+      let g = null;
+      if (res.guestId) {
+        const gSnap = await getDoc(doc(db, "guests", res.guestId));
+        if (gSnap.exists()) g = { id: gSnap.id, ...gSnap.data() };
+      }
+      if (!g) {
+        const gQ = query(collection(db, "guests"), where("name", "==", res.guestName || ""));
+        const gSnap = await getDocs(gQ);
+        if (!gSnap.empty) g = { id: gSnap.docs[0].id, ...gSnap.docs[0].data() };
+      }
+      setGuest(g);
+
+      // stays, postings, payments
+      const [sSnap, pSnap, paySnap] = await Promise.all([
+        getDocs(query(collection(db, "stays"), where("reservationId", "==", res.id))),
+        getDocs(query(collection(db, "postings"), where("reservationId", "==", res.id))),
+        getDocs(query(collection(db, "payments"), where("reservationId", "==", res.id)))
+      ]);
+      setStays(sSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+      setPostings(pSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+      setPayments(paySnap.docs.map(d => ({ id: d.id, ...d.data() })));
+
+      // create forecasts when booked and assigned but no forecast exists (preserve prior behavior)
+      if ((res.status || "").toLowerCase() === "booked" && initialAssigned.length > 0) {
+        const pList = pSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+        const hasForecastRoom = pList.some(p => (p.status || "posted") === "forecast" && p.accountCode === "ROOM");
+        if (!hasForecastRoom) {
+          await createForecastRoomPostings(res, initialAssigned, g, roomsSnap.docs.map(d => d.data()), channelsSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+          await ensureDepositPosting(res, initialAssigned);
+          const p2 = await getDocs(query(collection(db, "postings"), where("reservationId", "==", res.id)));
+          setPostings(p2.docs.map(d => ({ id: d.id, ...d.data() })));
+        } else {
+          await ensureDepositPosting(res, initialAssigned);
+          const p2 = await getDocs(query(collection(db, "postings"), where("reservationId", "==", res.id)));
+          setPostings(p2.docs.map(d => ({ id: d.id, ...d.data() })));
+        }
+      }
+
+    } catch (err) {
+      console.error("load error", err);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  // Render
+  useEffect(() => {
+    if (id) load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
+  // subscribe to logs
+  useEffect(() => {
+    if (!reservation?.id) return;
+    const collRef = collection(doc(db, "reservations", reservation.id), "logs");
+    const q = query(collRef, orderBy("createdAt", "desc"));
+    const unsub = onSnapshot(q, snap => setLogs(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+    return () => unsub();
+  }, [reservation?.id]);
+
+  // Submit charge (no debounce; parse on submit)
+  const submitCharge = async () => {
+    const qty = Math.max(1, toInt(chargeForm.qtyStr));
+    const unit = Math.max(0, toInt(chargeForm.unitStr));
+    const total = qty * unit;
+    if (!chargeForm.description?.trim()) { alert("Description required"); return; }
+    if (total <= 0) { alert("Total must be > 0"); return; }
+    const status = (reservation?.status || "").toLowerCase() === "checked-in" ? "posted" : "forecast";
+    try {
+      await addDoc(collection(db, "postings"), {
+        reservationId: reservation.id,
+        stayId: null,
+        roomNumber: null,
+        description: chargeForm.description.trim(),
+        amount: total,
+        tax: 0,
+        service: 0,
+        quantity: qty,
+        unitAmount: unit,
+        accountCode: (chargeForm.accountCode || "MISC").toUpperCase(),
+        status,
+        createdAt: new Date(),
+        createdBy: actorName
+      });
+      setShowAddCharge(false);
+      setChargeForm({ description: "", qtyStr: "1", unitStr: "", accountCode: "MISC" });
+      await load();
+    } catch (err) {
+      console.error("submitCharge error", err);
+      alert("Failed to add charge");
+    }
+  };
+
+  // Submit payment (no debounce; parse on submit)
+  const submitPayment = async () => {
+    const amt = Math.max(0, toInt(paymentForm.amountStr));
+    if (amt <= 0) { alert("Payment must be > 0"); return; }
+    try {
+      await addDoc(collection(db, "payments"), {
+        reservationId: reservation.id,
+        stayId: null,
+        method: paymentForm.method || "cash",
+        amount: amt,
+        refNo: paymentForm.refNo || "",
+        capturedAt: new Date(),
+        capturedBy: actorName,
+        type: paymentForm.type || "payment"
+      });
+      setShowAddPayment(false);
+      setPaymentForm({ amountStr: "", method: "cash", refNo: "", type: "payment" });
+      await load();
+    } catch (err) {
+      console.error("submitPayment error", err);
+      alert("Failed to add payment");
+    }
+  };
+
+    // --- Log reservation change ---
+  async function logReservationChange(action, details = {}) {
+    if (!reservation?.id) return;
+    try {
+      const collRef = collection(doc(db, "reservations", reservation.id), "logs");
+      await addDoc(collRef, {
+        action,
+        details,
+        createdAt: new Date(),
+        createdBy: actorName,
+      });
+    } catch (err) {
+      console.error("Failed to log reservation change", action, err);
+    }
+  }
+
+  // --- Edit reservation (basic example) ---
+  async function handleEditReservation(updates = {}) {
+    if (!reservation?.id) return;
+    const newData = { ...updates, updatedAt: new Date(), updatedBy: actorName };
+    try {
+      await updateDoc(doc(db, "reservations", reservation.id), newData);
+      await logReservationChange("edit", { updates: newData });
+      alert("Reservation updated");
+      await load();
+    } catch (err) {
+      console.error("Edit failed", err);
+      alert("Failed to edit reservation");
+    }
+  }
+
+  // --- Delete reservation ---
+  async function handleDeleteReservation() {
+    if (!reservation?.id) return;
+    if (!window.confirm("Delete this reservation? This cannot be undone.")) return;
+    try {
+      await updateDoc(doc(db, "reservations", reservation.id), {
+        status: "deleted",
+        deletedAt: new Date(),
+        deletedBy: actorName,
+      });
+      await logReservationChange("delete", { reason: "manual delete" });
+      alert("Reservation deleted");
+      navigate("/calendar");
+    } catch (err) {
+      console.error("Delete failed", err);
+      alert("Failed to delete reservation");
+    }
+  }
+
+  // --- No Show handler ---
+  async function doNoShow() {
+    if (!reservation?.id) return;
+    if ((reservation.status || "").toLowerCase() !== "booked") {
+      alert("Only booked reservations can be marked as No Show");
+      return;
+    }
+    if (!window.confirm("Mark this reservation as No Show?")) return;
+    try {
+      await updateDoc(doc(db, "reservations", reservation.id), {
+        status: "no-show",
+        noShowAt: new Date(),
+        updatedBy: actorName,
+      });
+      await logReservationChange("no-show", { previousStatus: reservation.status });
+      alert("Marked as No Show");
+      await load();
+    } catch (err) {
+      console.error("No show failed", err);
+      alert("Failed to mark as No Show");
+    }
+  }
+
+  // Check-in flow
+  const doCheckIn = async () => {
+    if (!reservation) return;
+    if ((reservation.status || "").toLowerCase() !== "booked") { alert("Reservation is not booked"); return; }
+    if (!assignRooms.length) { alert("Assign at least one room"); return; }
+    setLoading(true);
+    try {
+      const stayMap = {};
+      await runTransaction(db, async tx => {
+        const resRef = doc(db, "reservations", reservation.id);
+        const resSnap = await tx.get(resRef);
+        if (!resSnap.exists()) throw new Error("Reservation not found");
+        for (const roomNumber of assignRooms) {
+          const stayRef = doc(collection(db, "stays"));
+          tx.set(stayRef, {
+            reservationId: reservation.id,
+            guestId: guest?.id || null,
+            guestName: reservation.guestName || "",
+            roomNumber,
+            checkInDate: reservation.checkInDate,
+            checkOutDate: reservation.checkOutDate,
+            openedAt: new Date(),
+            closedAt: null,
+            status: "open",
+            currency: settings.currency || "IDR",
+            createdBy: actorName
+          });
+          stayMap[roomNumber] = stayRef.id;
+          tx.update(doc(db, "rooms", roomNumber), { status: "Occupied" });
+        }
+        tx.update(resRef, { status: "checked-in", checkedInAt: new Date(), roomNumbers: assignRooms });
+      });
+
+      await convertForecastsToPosted(stayMap);
+      await ensureDepositPosting(reservation, assignRooms);
+      alert("Checked in");
+      await load();
+    } catch (err) {
+      console.error("doCheckIn error", err);
+      alert("Check-in failed: " + (err.message || err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Check-out flow
+  const doCheckOut = async () => {
+    const charges = (postings || []).filter(p => statusOf(p) !== "void").reduce((s, p) => s + Number(p.amount || 0), 0);
+    const pays = (payments || []).filter(p => statusOf(p) !== "void").reduce((s, p) => s + Number(p.amount || 0), 0);
+    const balance = charges - pays;
+    if (balance > 0.01 && !canOverrideBilling) {
+      alert(`Outstanding ${fmtIdr(balance)}. Override required to check out.`);
+      return;
+    }
+    setLoading(true);
+    try {
+      await runTransaction(db, async tx => {
+        const openStays = stays.filter(s => (s.status || "") === "open");
+        for (const s of openStays) {
+          tx.update(doc(db, "stays", s.id), { status: "closed", closedAt: new Date() });
+          tx.update(doc(db, "rooms", s.roomNumber), { status: "Vacant Dirty" });
+          const taskRef = doc(collection(db, "hk_tasks"));
+          tx.set(taskRef, {
+            roomNumber: s.roomNumber,
+            date: new Date().toISOString().slice(0, 10),
+            type: "clean",
+            status: "pending",
+            createdAt: new Date(),
+            createdBy: actorName,
+            reservationId: reservation.id
+          });
+        }
+        tx.update(doc(db, "reservations", reservation.id), { status: "checked-out", checkedOutAt: new Date() });
+      });
+      alert("Checked out");
+      await load();
+    } catch (err) {
+      console.error("doCheckOut error", err);
+      alert("Check-out failed: " + (err.message || err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Print handlers, linked to AdminPrintTemplate stored doc (admin_print_templates/default)
+  // We only allow print check-in when reservation is checked-in; print check-out only when checked-out.
+async function printCheckInForm() {
+    if (!reservation) return;
+    const status = (reservation.status || "").toLowerCase();
+    if (status !== "checked-in") {
+      alert("Reservation must be checked-in before printing check-in form.");
+      return;
+    }
+    // create resolver that ReservationDetailC will call when templates/render ready
+    const readyPromise = createPrintReadyPromise();
+    setPrintMode("checkin");
+    try {
+      // wait until child signals ready (timeout fallback in 2s)
+      await Promise.race([readyPromise, new Promise((r) => setTimeout(r, 2000))]);
+      window.print();
+    } finally {
+      // clear print mode a little after print (allow print styles to apply)
+      setTimeout(() => setPrintMode(null), 300);
+      printReadyResolverRef.current = null;
+    }
+  }
+
+  async function printCheckOutForm() {
+    if (!reservation) return;
+    const status = (reservation.status || "").toLowerCase();
+    if (status !== "checked-out") {
+      alert("Reservation must be checked-out before printing check-out form.");
+      return;
+    }
+    const readyPromise = createPrintReadyPromise();
+    setPrintMode("checkout");
+    try {
+      await Promise.race([readyPromise, new Promise((r) => setTimeout(r, 2000))]);
+      window.print();
+    } finally {
+      setTimeout(() => setPrintMode(null), 300);
+      printReadyResolverRef.current = null;
+    }
+  }
+
+  // Derived totals
+  const visiblePostings = useMemo(() => (postings || []).filter(p => statusOf(p) !== "void"), [postings]);
+  const displayChargeLines = useMemo(() => {
+    const targetStatus = (reservation?.status || "").toLowerCase() === "booked" ? "forecast" : "posted";
+    return visiblePostings.filter(p => statusOf(p) === targetStatus && acctOf(p) !== "PAY");
+  }, [visiblePostings, reservation]);
+
+  const displayChargesTotal = useMemo(() => displayChargeLines.reduce((s, p) => s + Number(p.amount || 0) + Number(p.tax || 0) + Number(p.service || 0), 0), [displayChargeLines]);
+  const displayPaymentsTotal = useMemo(() => (payments || []).filter(p => statusOf(p) !== "void" && statusOf(p) !== "refunded").reduce((s, p) => s + Number(p.amount || 0), 0), [payments]);
+  const displayBalance = displayChargesTotal - displayPaymentsTotal;
+
+  // small fmt helper (used by children)
+  // small fmt helper (used by children)
+// robustly handles Firestore Timestamps, plain Date, number (ms), and ISO strings
+const fmt = (raw) => {
+  if (!raw && raw !== 0) return "-";
+  let dateObj = null;
+
+  try {
+    // Firestore Timestamp object has .toDate()
+    if (raw && typeof raw.toDate === "function") {
+      dateObj = raw.toDate();
+    }
+    // Some code stores plain seconds / seconds+nanos object
+    else if (raw && typeof raw.seconds === "number") {
+      dateObj = new Date(Number(raw.seconds) * 1000);
+    }
+    // If it's already a Date instance
+    else if (raw instanceof Date) {
+      dateObj = raw;
+    }
+    // If it's a numeric epoch in ms
+    else if (typeof raw === "number") {
+      dateObj = new Date(raw);
+    }
+    // If it's a string, try parse it
+    else if (typeof raw === "string") {
+      const maybe = new Date(raw);
+      dateObj = isNaN(maybe) ? null : maybe;
+    } else {
+      // fallback try
+      const maybe = new Date(raw);
+      dateObj = isNaN(maybe) ? null : maybe;
+    }
+  } catch (err) {
+    dateObj = null;
+  }
+
+  if (!dateObj || isNaN(dateObj.getTime())) return "-";
+  return dateObj.toLocaleString();
+};
+
+      {/* Change logging for transactions and operations */}
+      {/* Call logReservationChange after user actions */}
+     useEffect(() => {
+        if (!reservation) return;
+        if (payments.length > 0) {
+          logReservationChange("payment_added", {
+            latestPayment: payments[payments.length - 1],
+          });
+       }
+      }, [payments]);
+
+      useEffect(() => {
+        if (!reservation) return;
+        if (reservation.status === "checked-in") logReservationChange("check_in", {});
+        if (reservation.status === "checked-out") logReservationChange("check_out", {});
+      }, [reservation?.status]);
+
+      {/* Remove duplicated folio component */}
+
+  if (loading || !reservation) {
+    return <div style={{ padding: 20 }}>Loading reservation…</div>;
+  }
+
   return (
-    <div className="reservations-container">
-      <h2 style={{ marginBottom: 8 }}>Front Desk Check-In</h2>
-
-      <div className="reservation-form" style={{ marginBottom: 16 }}>
-        <label htmlFor="fd-date">Date</label>
-        <input
-          id="fd-date"
-          type="date"
-          value={date}
-          onChange={(e) => setDate(e.target.value)}
-          aria-label="Select business date"
+    <div>
+      {/* Only render printable version when printMode is active */}
+      {printMode && (
+        <ReservationDetailC
+          printRef={printRef}
+          printMode={printMode}
+          // child will call this when templates are loaded and printable DOM is ready
+          onTemplatesLoaded={() => {
+            if (printReadyResolverRef.current) {
+              try { printReadyResolverRef.current(); } catch (e) { /* noop */ }
+            }
+          }}
+          reservation={reservation}
+          settings={settings}
+          fmt={fmt}
+          postings={postings}
+          visiblePostings={visiblePostings}
+          displayChargeLines={displayChargeLines}
+          displayChargesTotal={displayChargesTotal}
+          displayPaymentsTotal={displayPaymentsTotal}
+          displayBalance={displayBalance}
+          payments={payments}
+          canOperate={canOperate}
+          isAdmin={isAdmin}
+          showAddCharge={showAddCharge}
+          setShowAddCharge={setShowAddCharge}
+          chargeForm={chargeForm}
+          setChargeForm={setChargeForm}
+          submitCharge={submitCharge}
+          showAddPayment={showAddPayment}
+          setShowAddPayment={setShowAddPayment}
+          paymentForm={paymentForm}
+          setPaymentForm={setPaymentForm}
+          submitPayment={submitPayment}
+          guest={guest}
         />
+       )}
 
-        <div className="form-actions" style={{ marginBottom: 8 }}>
-          <button
-            className="btn btn-primary"
-            onClick={() => {
-              setDate(todayStr());
+      {/* When NOT printing, show normal layout */}
+      {!printMode && (
+        <ReservationDetailB
+            reservation={reservation}
+            guest={guest}
+            settings={settings}
+            rooms={rooms}
+            assignRooms={assignRooms}
+            setAssignRooms={async (next) => {
+              setAssignRooms(next);
+              try {
+                await updateDoc(doc(db, "reservations", reservation.id), { roomNumbers: next });
+                await createForecastRoomPostings({ ...reservation, roomNumbers: next }, next, guest, rooms, channels);
+                await ensureDepositPosting({ ...reservation, roomNumbers: next }, next);
+                await load();
+              } catch (err) {
+                console.error("setAssignRooms persist error", err);
+              }
             }}
-            title="Set to today's date"
-          >
-            Today
-          </button>
-
-          <button
-            className="btn"
-            onClick={() => {
-              const t = new Date();
-              t.setDate(t.getDate() + 1);
-              setDate(ymd(t));
+            renderAssignmentRow={(i) => {
+              const val = assignRooms[i] || "";
+              const lockType = (Array.isArray(reservation?.roomNumbers) ? reservation.roomNumbers[i] : null) ? rooms.find(r => r.roomNumber === reservation.roomNumbers[i])?.roomType : null;
+              const options = rooms.filter(r => r.status !== "OOO" && r.status !== "Occupied" && (!lockType || r.roomType === lockType));
+              return (
+                <div key={i} style={{ marginBottom: 6 }}>
+                  <select
+                    value={val}
+                    onChange={async (e) => {
+                      const nextVal = e.target.value;
+                      const next = [...assignRooms];
+                      next[i] = nextVal;
+                      setAssignRooms(next);
+                      await updateDoc(doc(db, "reservations", reservation.id), { roomNumbers: next });
+                      await createForecastRoomPostings({ ...reservation, roomNumbers: next }, next, guest, rooms, channels);
+                      await ensureDepositPosting({ ...reservation, roomNumbers: next }, next);
+                      await load();
+                    }}
+                  >
+                    <option value="">Select room</option>
+                    {options.map(r => <option key={r.roomNumber} value={r.roomNumber}>{r.roomNumber} ({r.roomType}) {r.status ? `[${r.status}]` : ""}</option>)}
+                  </select>
+                </div>
+              );
             }}
-            title="Set to tomorrow"
-          >
-            Tomorrow
-          </button>
-        </div>
+            canOperate={canOperate}
+            canUpgrade={canUpgrade}
+            doCheckIn={doCheckIn}
+            doCheckOut={doCheckOut}
+            printCheckInForm={printCheckInForm}
+            printCheckOutBill={printCheckOutForm}
+            stays={stays}
+            fmt={fmt}
+            isAdmin={isAdmin}
+            navigate={navigate}
+            doNoShow={doNoShow}
+            handleEditReservation={handleEditReservation}
+            handleDeleteReservation={handleDeleteReservation}
+            logReservationChange={logReservationChange}
+          />
 
-        <label htmlFor="fd-search">Search</label>
-        <input
-          id="fd-search"
-          placeholder="Search Guest / Res No / Room"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          onKeyDown={handleKeySearch}
-          aria-label="Search arrivals"
-        />
-      </div>
+           )}
 
-      {/* Loading, error, empty states (kept and enhanced) */}
-      {loading && <div className="muted">Loading arrivals...</div>}
 
-      {error && (
-        <div style={{ marginBottom: 12 }}>
-          <div className="error">{error}</div>
-          <div style={{ marginTop: 8 }}>
-            <button className="btn" onClick={handleRetry}>Retry</button>
-          </div>
-        </div>
-      )}
-
-      {!loading && !hasArrivals && !error && (
-        <div className="muted">No arrivals for this date.</div>
-      )}
-
-      {/* Arrivals table (kept columns & structure) */}
-      {hasArrivals && (
-        <table className="reservations-table modern-table">
-          <thead>
-            <tr>
-              <th>Reservation</th>
-              <th>Guest</th>
-              <th>Rooms</th>
-              <th>Stay Period</th>
-              <th>Occupancy</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {arrivals.map((r, i) => (
-              <tr key={r.id} className={i % 2 === 0 ? "row-even" : "row-odd"}>
-                <td><strong>{r.resNo || r.id}</strong></td>
-                <td>{r.guestName || "-"}</td>
-                <td>
-                  {(Array.isArray(r.roomNumbers) ? r.roomNumbers : [r.roomNumber])
-                    .filter(Boolean)
-                    .map((n) => (
-                      <span key={n} className="badge-room">{roomBadge(n)}</span>
-                    ))}
-                </td>
-                <td>
-                  <div>{fmt(r.checkInDate)}</div>
-                  <div style={{ fontSize: "12px", color: "#64748b" }}>
-                    → {fmt(r.checkOutDate)}
-                  </div>
-                </td>
-                <td>{r.adults ?? 0}A / {r.children ?? 0}C</td>
-                <td>
-                  {can("canViewReservations") && (
-                    <Link className="btn btn-sm btn-primary" to={`/reservations/${r.id}`}>
-                      View
-                    </Link>
-                  )}
-                </td>
-              </tr>
+      {/* change log */}
+      <div style={{ marginTop: 24 }}>
+        <div style={{ fontWeight: 700, marginBottom: 8 }}>Change Log</div>
+        {logs.length === 0 ? <div style={{ color: "#64748b", fontStyle: "italic" }}>No changes logged yet.</div> : (
+          <ol>
+            {logs.map(l => (
+              <li key={l.id} style={{ marginBottom: 8 }}>
+                <div style={{ fontWeight: 600 }}>{(l.action || "").toString().toUpperCase()}</div>
+                <div style={{ fontSize: 12, color: "#475569" }}>{new Date(l.at || l.createdAt || Date.now()).toLocaleString()}</div>
+              </li>
             ))}
-          </tbody>
-        </table>
-      )}
+          </ol>
+        )}
+      </div>
     </div>
   );
 }
