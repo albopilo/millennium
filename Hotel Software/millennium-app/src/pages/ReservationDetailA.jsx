@@ -1069,104 +1069,125 @@ export default function ReservationDetailA({ permissions = [], currentUser = nul
     );
   }
 
-  // AddChargeModal (simple) — immediate typing, onlyDigits used to strip non-digit input instantly.
-  function AddChargeModal({ open, onClose }) {
-    if (!open) return null;
-    return (
-      <div style={{
-        position: "fixed", inset: 0, display: "flex", alignItems: "center", justifyContent: "center",
-        background: "rgba(0,0,0,0.4)", zIndex: 1200
-      }}>
-        <div style={{ width: 520, maxWidth: "95%", background: "#fff", borderRadius: 8, padding: 16 }}>
-          <h3>Add Charge</h3>
-          <div style={{ marginTop: 8 }}>
-            <label>Description</label>
-            <input
-              style={{ width: "100%" }}
-              value={chargeForm.description}
-              onChange={(e) => setChargeForm({ ...chargeForm, description: e.target.value })}
-              placeholder="e.g., Mini bar / Laundry"
-            />
-          </div>
-          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-            <div style={{ flex: 1 }}>
-              <label>Qty</label>
-              <input
-                inputMode="numeric"
-                pattern="\d*"
-                value={chargeForm.qtyStr}
-                onChange={(e) => setChargeForm({ ...chargeForm, qtyStr: onlyDigits(e.target.value) })}
-              />
-            </div>
-            <div style={{ flex: 1 }}>
-              <label>Unit (IDR)</label>
-              <input
-                inputMode="numeric"
-                pattern="\d*"
-                value={chargeForm.unitStr}
-                onChange={(e) => setChargeForm({ ...chargeForm, unitStr: onlyDigits(e.target.value) })}
-              />
-            </div>
-            <div style={{ flex: 1 }}>
-              <label>Account</label>
-              <select value={chargeForm.accountCode} onChange={(e) => setChargeForm({ ...chargeForm, accountCode: e.target.value })}>
-                <option value="MISC">MISC</option>
-                <option value="ROOM">ROOM</option>
-                <option value="DEPOSIT">DEPOSIT</option>
-              </select>
-            </div>
-          </div>
-
-          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
-            <button onClick={onClose}>Cancel</button>
-            <button onClick={submitCharge} className="btn btn-primary">Save Charge</button>
-          </div>
+// -----------------------
+// AddChargeModal (no re-render lag)
+// -----------------------
+const AddChargeModal = React.memo(function AddChargeModal({ open, onClose, chargeForm, setChargeForm, submitCharge, onlyDigits }) {
+  if (!open) return null;
+  return (
+    <div style={{
+      position: "fixed", inset: 0, display: "flex", alignItems: "center", justifyContent: "center",
+      background: "rgba(0,0,0,0.4)", zIndex: 1200
+    }}>
+      <div style={{ width: 520, maxWidth: "95%", background: "#fff", borderRadius: 8, padding: 16 }}>
+        <h3>Add Charge</h3>
+        <div style={{ marginTop: 8 }}>
+          <label>Description</label>
+          <input
+            style={{ width: "100%" }}
+            value={chargeForm.description}
+            onChange={(e) =>
+              setChargeForm((f) => ({ ...f, description: e.target.value }))
+            }
+          />
         </div>
-      </div>
-    );
-  }
-
-  // AddPaymentModal — immediate typing, no debounce; onlyDigits used to sanitize input on every keystroke
-  function AddPaymentModal({ open, onClose }) {
-    if (!open) return null;
-    return (
-      <div style={{
-        position: "fixed", inset: 0, display: "flex", alignItems: "center", justifyContent: "center",
-        background: "rgba(0,0,0,0.4)", zIndex: 1200
-      }}>
-        <div style={{ width: 420, maxWidth: "95%", background: "#fff", borderRadius: 8, padding: 16 }}>
-          <h3>Add Payment</h3>
-          <div style={{ marginTop: 8 }}>
-            <label>Amount (IDR)</label>
+        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+          <div style={{ flex: 1 }}>
+            <label>Qty</label>
             <input
-              inputMode="numeric"
-              pattern="\d*"
-              value={paymentForm.amountStr}
-              onChange={(e) => setPaymentForm({ ...paymentForm, amountStr: onlyDigits(e.target.value) })}
-              placeholder="e.g., 100000"
+              value={chargeForm.qtyStr}
+              onChange={(e) =>
+                setChargeForm((f) => ({ ...f, qtyStr: onlyDigits(e.target.value) }))
+              }
             />
           </div>
-          <div style={{ marginTop: 8 }}>
-            <label>Method</label>
-            <select value={paymentForm.method} onChange={(e) => setPaymentForm({ ...paymentForm, method: e.target.value })}>
-              <option value="cash">Cash</option>
-              <option value="card">Card</option>
-              <option value="bank">Bank</option>
+          <div style={{ flex: 1 }}>
+            <label>Unit (IDR)</label>
+            <input
+              value={chargeForm.unitStr}
+              onChange={(e) =>
+                setChargeForm((f) => ({ ...f, unitStr: onlyDigits(e.target.value) }))
+              }
+            />
+          </div>
+          <div style={{ flex: 1 }}>
+            <label>Account</label>
+            <select
+              value={chargeForm.accountCode}
+              onChange={(e) =>
+                setChargeForm((f) => ({ ...f, accountCode: e.target.value }))
+              }
+            >
+              <option value="MISC">MISC</option>
+              <option value="ROOM">ROOM</option>
+              <option value="DEPOSIT">DEPOSIT</option>
             </select>
           </div>
-          <div style={{ marginTop: 8 }}>
-            <label>Reference No</label>
-            <input value={paymentForm.refNo} onChange={(e) => setPaymentForm({ ...paymentForm, refNo: e.target.value })} />
-          </div>
+        </div>
 
-          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
-            <button onClick={onClose}>Cancel</button>
-            <button onClick={submitPayment} className="btn btn-primary">Save Payment</button>
-          </div>
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
+          <button onClick={onClose}>Cancel</button>
+          <button onClick={submitCharge} className="btn btn-primary">Save Charge</button>
         </div>
       </div>
-    );
-  }
+    </div>
+  );
+});
+
+
+// -----------------------
+// AddPaymentModal (no re-render lag)
+// -----------------------
+const AddPaymentModal = React.memo(function AddPaymentModal({ open, onClose, paymentForm, setPaymentForm, submitPayment, onlyDigits }) {
+  if (!open) return null;
+  return (
+    <div style={{
+      position: "fixed", inset: 0, display: "flex", alignItems: "center", justifyContent: "center",
+      background: "rgba(0,0,0,0.4)", zIndex: 1200
+    }}>
+      <div style={{ width: 420, maxWidth: "95%", background: "#fff", borderRadius: 8, padding: 16 }}>
+        <h3>Add Payment</h3>
+        <div style={{ marginTop: 8 }}>
+          <label>Amount (IDR)</label>
+          <input
+            value={paymentForm.amountStr}
+            onChange={(e) =>
+              setPaymentForm((f) => ({ ...f, amountStr: onlyDigits(e.target.value) }))
+            }
+          />
+        </div>
+        <div style={{ marginTop: 8 }}>
+          <label>Method</label>
+          <select
+            value={paymentForm.method}
+            onChange={(e) =>
+              setPaymentForm((f) => ({ ...f, method: e.target.value }))
+            }
+          >
+            <option value="cash">Cash</option>
+            <option value="card">Card</option>
+            <option value="bank">Bank</option>
+          </select>
+        </div>
+        <div style={{ marginTop: 8 }}>
+          <label>Reference No</label>
+          <input
+            value={paymentForm.refNo}
+            onChange={(e) =>
+              setPaymentForm((f) => ({ ...f, refNo: e.target.value }))
+            }
+          />
+        </div>
+
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
+          <button onClick={onClose}>Cancel</button>
+          <button onClick={submitPayment} className="btn btn-primary">Save Payment</button>
+        </div>
+      </div>
+    </div>
+  );
+});
+
 
   // -----------------------
   // Render
